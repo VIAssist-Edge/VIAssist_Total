@@ -1,0 +1,26 @@
+{
+    "schema_version": "1.0",
+    "image_path": "samples/escalator.png",
+    "user_query": "앞에 에스컬레이터가 있나요?",
+    "image_quality": {
+        "is_blurry": false,
+        "blur_score": 172.8
+    },
+    "detections": [
+        {
+            "class_name": "escalator",
+            "confidence": 0.95,
+            "bbox": [84, 0, 402, 255],
+            "position": "front"
+        }
+    ],
+    "motion": {
+        "available": true,
+        "target": "escalator",
+        "direction": "up",
+        "speed": "normal",
+        "confidence": 0.95
+    },
+    "image_width": 500,
+    "image_height": 333
+}

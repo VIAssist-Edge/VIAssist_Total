@@ -1,0 +1,18 @@
+{
+  "frame_id": 128,
+  "available": true,
+  "direction": "up",
+  "confidence": 0.83,
+  "speed": 1.84,
+  "mean_dx": -0.12,
+  "mean_dy": -1.84,
+  "magnitude": 1.84,
+  "valid_ratio": 0.41,
+  "roi": [420, 260, 900, 700],
+  "roi_source": "detection",
+  "stable_frames": 7,
+  "image_width": 1280,
+  "image_height": 720,
+  "ok": true,
+  "error": null
+}

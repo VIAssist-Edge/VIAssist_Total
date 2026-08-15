@@ -1,0 +1,26 @@
+{
+    "schema_version": "1.0",
+    "image_path": "samples/elevator_button.png",
+    "user_query": "엘리베이터 버튼이 어디에 있나요?",
+    "image_quality": {
+        "is_blurry": false,
+        "blur_score": 145.2
+    },
+    "detections": [
+        {
+            "class_name": "elevator_button",
+            "confidence": 0.91,
+            "bbox": [563, 335, 596, 408],
+            "position": "right"
+        }
+    ],
+    "motion": {
+        "available": false,
+        "target": null,
+        "direction": "unknown",
+        "speed": null,
+        "confidence": null
+    },
+    "image_width": 692,
+    "image_height": 694
+}

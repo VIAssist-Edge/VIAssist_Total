@@ -1,0 +1,29 @@
+{
+  "frame_id": 128,
+  "timestamp": 1750000000.123,
+  "image_width": 1280,
+  "image_height": 720,
+  "detections": [
+    {
+      "cls_id": 30,
+      "cls_name": "escalator",
+      "conf": 0.95,
+      "x1": 400,
+      "y1": 100,
+      "x2": 900,
+      "y2": 700,
+      "track_id": null,
+      "clock": 12,
+      "distance_m": null,
+      "area_ratio": 0.325,
+      "center_offset": 0.015
+    }
+  ],
+  "quality": {
+    "is_blurry": false,
+    "blur_score": 120.5
+  },
+  "latency_ms": 32.6,
+  "ok": true,
+  "error": null
+}

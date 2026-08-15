@@ -1,0 +1,11 @@
+{
+    "environment": "jetson",
+    "device": "cuda",
+    "python_version": "3.10",
+    "quantization": "none",
+    "max_new_tokens": 60,
+    "use_mock_model": false,
+    "model_id": "HuggingFaceTB/SmolVLM-500M-Instruct",
+    "image_longest_edge": 1024,
+    "max_image_size": 512
+}

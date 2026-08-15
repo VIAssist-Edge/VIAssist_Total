@@ -1,0 +1,13 @@
+{
+  "image_width": 1280,
+  "image_height": 720,
+  "frame_id": 100,
+  "timestamp_ms": 1000.0,
+  "detections": [
+    {
+      "class_name": "elevator-button",
+      "confidence": 0.91,
+      "bbox": [900, 150, 1100, 600]
+    }
+  ]
+}

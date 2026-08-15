@@ -1,0 +1,22 @@
+{
+  "description": "Phase 5 benchmark-only variants; production jetson.json is unchanged",
+  "variants": {
+    "baseline": {},
+    "tokens_32": {"max_new_tokens": 32},
+    "tokens_24": {"max_new_tokens": 24},
+    "tokens_16": {"max_new_tokens": 16},
+    "resolution_768": {"image_longest_edge": 768},
+    "resolution_512": {"image_longest_edge": 512},
+    "crop_512": {"crop_enabled": true, "crop_margin_ratio": 0.25, "crop_max_edge": 512},
+    "no_image_splitting": {"do_image_splitting": false},
+    "compact_prompt": {"compact_prompt": true},
+    "eager": {"attention_implementation": "eager"},
+    "sdpa": {"attention_implementation": "sdpa"},
+    "static_kv": {"cache_implementation": "static"},
+    "static_kv_compile": {"cache_implementation": "static", "torch_compile": true},
+    "fp16": {"dtype": "fp16"},
+    "bf16": {"dtype": "bf16"},
+    "int8": {"dtype": "int8"},
+    "nf4": {"dtype": "nf4"}
+  }
+}

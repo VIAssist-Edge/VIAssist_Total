@@ -1,0 +1,11 @@
+{
+    "environment": "pc",
+    "device": "auto",
+    "python_version": "3.11",
+    "quantization": "none",
+    "max_new_tokens": 80,
+    "use_mock_model": true,
+    "model_id": "HuggingFaceTB/SmolVLM-500M-Instruct",
+    "image_longest_edge": 2048,
+    "max_image_size": 512
+}

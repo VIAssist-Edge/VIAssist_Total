@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+*.pt
+*.pth
+*.onnx
+*.engine
+snapshots/
+outputs/
+*.log

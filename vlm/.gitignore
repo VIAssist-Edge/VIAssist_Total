@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+
+# Virtual environment
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Model cache
+models/
+cache/
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.engine
+*.onnx
+
+# Generated output
+outputs/*
+!outputs/.gitkeep
+
+# Environment variables
+.env
+
+# OS
+Thumbs.db
+.DS_Store
+# Jetson runtime reports
+reports/*.txt
+reports/*.log
+reports/repeat/
+reports/repeat_size1024/
+reports/latency_optimization/*.json
+reports/latency_optimization/*.log

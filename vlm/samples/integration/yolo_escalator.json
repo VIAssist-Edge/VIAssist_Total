@@ -1,0 +1,14 @@
+{
+  "image_width": 1280,
+  "image_height": 720,
+  "frame_id": 200,
+  "timestamp_ms": 2000.0,
+  "detections": [
+    {
+      "class_name": "moving_stairs",
+      "confidence": 0.95,
+      "bbox": [400, 100, 900, 700],
+      "position": "center"
+    }
+  ]
+}
