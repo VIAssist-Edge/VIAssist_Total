@@ -52,6 +52,12 @@ class MetadataAdapterTest(unittest.TestCase):
         result = self.build(yolo(detection(class_name="moving_stairs")))
         self.assertEqual(result["detections"][0]["class_name"], "escalator")
 
+    def test_escalator_falling_alias(self) -> None:
+        """mvp/best.pt(2026-08-16 교체본)가 실제로 내보내는 escalator 클래스명."""
+
+        result = self.build(yolo(detection(class_name="Escalator Falling")))
+        self.assertEqual(result["detections"][0]["class_name"], "escalator")
+
     def test_confidence_descending_stable_sort(self) -> None:
         result = self.build(
             yolo(

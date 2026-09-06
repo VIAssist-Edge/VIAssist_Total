@@ -15,6 +15,9 @@ from typing import Any, Iterable, Optional
 FLOW_DIRECTION_MAP = {
     "UP": "up",
     "DOWN": "down",
+    # 사람·차량 등은 좌우로 움직인다. 에스컬레이터만 보던 때는 필요 없었다.
+    "LEFT": "left",
+    "RIGHT": "right",
     "STATIONARY": "stopped",
 }
 
@@ -23,7 +26,9 @@ UNDECIDED_DIRECTIONS = frozenset(
     {"UNCERTAIN", "ANALYZING", "NO_ESCALATOR", "UNKNOWN", ""}
 )
 
-SUPPORTED_DIRECTIONS = frozenset({"up", "down", "stopped", "unknown"})
+SUPPORTED_DIRECTIONS = frozenset(
+    {"up", "down", "left", "right", "stopped", "unknown"}
+)
 
 
 def normalize_direction(direction: Any) -> str:
@@ -149,6 +154,19 @@ def build_yolo_payload(
                 image_height=image_height,
             )
             if payload is not None:
+                # 객체별 움직임을 detection에 함께 싣는다. 계약 §4의
+                # detection 항목에 motion 키가 추가되는 형태다.
+                motion = detection.get("motion")
+                if isinstance(motion, dict):
+                    direction = normalize_direction(motion.get("direction"))
+                    payload["motion"] = {
+                        "available": direction != "unknown",
+                        "direction": direction,
+                        "dx": _float(motion.get("dx")) or 0.0,
+                        "dy": _float(motion.get("dy")) or 0.0,
+                        "magnitude": _float(motion.get("magnitude")) or 0.0,
+                        "confidence": _float(motion.get("confidence")) or 0.0,
+                    }
                 converted.append(payload)
 
     return {

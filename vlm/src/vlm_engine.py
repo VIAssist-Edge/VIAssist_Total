@@ -25,6 +25,8 @@ class MockVLMEngine:
         prompt: str,
         metadata: dict[str, Any],
     ) -> str:
+        if metadata.get("mode") == "scene_description":
+            return "주변에 사람이 있습니다."
         selected_detection = select_detection(metadata)
         return build_safe_fallback(
             metadata=metadata,

@@ -7,14 +7,57 @@ CONFIDENCE_THRESHOLD = 0.5
 MAX_MESSAGE_LENGTH = 120
 MAX_SENTENCES = 2
 
-SUPPORTED_TARGETS = frozenset({"elevator_button", "escalator"})
+# best.pt(32 classes)가 내는 모든 클래스를 안내 대상으로 삼는다.
+# 값은 한국어 표기이며, Safety Validator가 문장 검증에 함께 쓴다.
+TARGET_KO = {
+    "escalator": "에스컬레이터",
+    "elevator_button": "엘리베이터 버튼",
+    "subway_ticket_gate_all": "개찰구",
+    "subway_ticket_gate_each": "개찰구",
+    "s_button": "버튼",
+    "s_display": "표시등",
+    "disp_up": "상행 표시",
+    "disp_down": "하행 표시",
+    "open": "열린 문",
+    "close": "닫힌 문",
+    "middle": "반쯤 열린 문",
+    "barricade": "바리케이드",
+    "bench": "벤치",
+    "bicycle": "자전거",
+    "bollard": "볼라드",
+    "bus": "버스",
+    "car": "승용차",
+    "carrier": "캐리어",
+    "chair": "의자",
+    "fire_hydrant": "소화전",
+    "kiosk": "키오스크",
+    "motorcycle": "오토바이",
+    "movable_signage": "입간판",
+    "person": "사람",
+    "pole": "기둥",
+    "potted_plant": "화분",
+    "stop": "정지 표지",
+    "stroller": "유모차",
+    "table": "탁자",
+    "traffic_light": "신호등",
+    "traffic_sign": "교통 표지판",
+    "tree_trunk": "나무",
+    "truck": "트럭",
+}
+
+SUPPORTED_TARGETS = frozenset(TARGET_KO)
 
 TARGET_QUERY_KEYWORDS = {
     "elevator_button": ("엘리베이터 버튼", "승강기 버튼", "버튼"),
     "escalator": ("에스컬레이터",),
 }
 
-TARGET_MESSAGE_SYNONYMS = {
+# 한국어 표기는 TARGET_KO에서 자동으로 채우고, 아래에서 별칭만 덧붙인다.
+TARGET_MESSAGE_SYNONYMS: dict[str, tuple[str, ...]] = {
+    name: (korean,) for name, korean in TARGET_KO.items()
+}
+
+_EXTRA_MESSAGE_SYNONYMS = {
     "elevator_button": (
         "엘리베이터 버튼",
         "엘리베이터 호출 버튼",
@@ -22,7 +65,22 @@ TARGET_MESSAGE_SYNONYMS = {
         "승강기 호출 버튼",
     ),
     "escalator": ("에스컬레이터",),
+    "person": ("사람", "행인", "보행자"),
+    "car": ("승용차", "자동차", "차량"),
+    "truck": ("트럭", "화물차"),
+    "bus": ("버스",),
+    "bicycle": ("자전거",),
+    "motorcycle": ("오토바이", "이륜차"),
+    "stroller": ("유모차",),
+    "traffic_light": ("신호등", "교통 신호"),
+    "subway_ticket_gate_all": ("개찰구", "게이트"),
+    "subway_ticket_gate_each": ("개찰구", "게이트"),
 }
+
+for _name, _extra in _EXTRA_MESSAGE_SYNONYMS.items():
+    TARGET_MESSAGE_SYNONYMS[_name] = tuple(
+        dict.fromkeys(TARGET_MESSAGE_SYNONYMS.get(_name, ()) + _extra)
+    )
 
 POSITION_SYNONYMS = {
     "left": ("왼쪽", "좌측"),
@@ -64,6 +122,13 @@ UNNATURAL_KOREAN_TERMS = (
     "존재하는 것입니다",
     "있는 것으로 보입니다",
     "것으로 확인됩니다",
+    # "주변 상황은 아래에 있습니다"처럼 실제 내용 없이 다른 곳을 참조하는
+    # 번역체 채움 문장. "계단이 아래에 있습니다"처럼 주격 조사(이/가)로 특정
+    # 대상의 위치를 설명하는 문장은 이 패턴에 걸리지 않는다.
+    "은 아래에 있습니다",
+    "는 아래에 있습니다",
+    "다음과 같습니다",
+    "아래와 같습니다",
 )
 
 # 생성문에 허용하는 짧은 TTS 안내 종결. fallback은 요청 문장을 포함할 수 있어

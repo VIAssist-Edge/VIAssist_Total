@@ -1,0 +1,12 @@
+{
+    "environment": "jetson",
+    "engine": "gemini",
+    "model_id": "gemini-2.5-flash",
+    "fallback_model_ids": [],
+    "max_new_tokens": 256,
+    "use_mock_model": false,
+    "max_image_size": 640,
+    "request_timeout_seconds": 25.0,
+    "jpeg_quality": 85,
+    "stream": true
+}

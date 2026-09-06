@@ -293,6 +293,33 @@ class MvpVlmIntegrationTest(unittest.TestCase):
         )
         self.assertNotEqual(result["status"], "detected")
 
+    def test_describe_scene_does_not_need_yolo_or_flow_payload(self) -> None:
+        """`describe()`와 달리 elevator_button/escalator 탐지가 없어도 동작한다."""
+
+        engine = RecordingEngine("정면에 사람이 서 있습니다.")
+        bridge = bridge_with(engine)
+        result = bridge.describe_scene(
+            frame=frame(), user_query="주변에 뭐가 있어?"
+        )
+        self.assertEqual(result["mode"], "scene_description")
+        self.assertEqual(result["message"], "정면에 사람이 서 있습니다.")
+        self.assertFalse(result["used_fallback"])
+        self.assertEqual(len(engine.calls), 1)
+        self.assertEqual(engine.calls[0]["metadata"]["mode"], "scene_description")
+
+    def test_describe_scene_still_blocks_unsafe_output_forms(self) -> None:
+        engine = RecordingEngine("안전합니다. 바로 지나가세요.")
+        bridge = bridge_with(engine)
+        result = bridge.describe_scene(frame=frame(), user_query="주변 설명해줘.")
+        self.assertTrue(result["used_fallback"])
+        self.assertNotIn("안전합니다", result["message"])
+        self.assertNotIn("지나가세요", result["message"])
+
+    def test_describe_scene_missing_frame_is_rejected(self) -> None:
+        bridge = bridge_with(MockVLMEngine())
+        with self.assertRaises(ValueError):
+            bridge.describe_scene(frame=None, user_query="주변 설명해줘.")
+
 
 if __name__ == "__main__":
     unittest.main()

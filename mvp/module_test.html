@@ -1,0 +1,866 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VIAssist 모듈 점검</title>
+<style>
+  :root { --bg:#0f1115; --panel:#181b22; --line:#2a2f3a; --text:#e6e8ee; --muted:#9aa3b2;
+          --ok:#36a269; --warn:#d9a441; --bad:#d05050; --accent:#4c8dff; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family: -apple-system, "Segoe UI", "Malgun Gothic", Arial, sans-serif; font-size:14px; }
+  header { display:flex; align-items:center; gap:14px; padding:10px 18px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:5; flex-wrap:wrap; }
+  header h1 { font-size:17px; margin:0; }
+  header .sys { color:var(--muted); font-size:12px; margin-left:auto; display:flex; gap:12px; flex-wrap:wrap; }
+  nav { display:flex; gap:4px; padding:8px 18px 0; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  nav button { background:transparent; color:var(--muted); border:1px solid transparent; border-bottom:0; padding:8px 14px; border-radius:8px 8px 0 0; cursor:pointer; font-size:14px; }
+  nav button.active { background:var(--panel); color:var(--text); border-color:var(--line); }
+  nav button .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#555; margin-right:6px; vertical-align:middle; }
+  .dot.ok { background:var(--ok);} .dot.warn{background:var(--warn);} .dot.bad{background:var(--bad);}
+  main { padding:16px 18px 40px; max-width:1500px; margin:0 auto; }
+  section { display:none; } section.active { display:block; }
+  .grid { display:grid; gap:14px; }
+  .g2 { grid-template-columns: 1fr 1fr; } .g3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 1000px) { .g2, .g3 { grid-template-columns: 1fr; } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .card h3 { margin:0 0 10px; font-size:14px; color:var(--muted); font-weight:600; letter-spacing:.3px; }
+  img.stream { width:100%; background:#000; border-radius:8px; border:1px solid var(--line); display:block; }
+  pre { background:#0b0d12; border:1px solid var(--line); padding:10px; border-radius:8px; overflow:auto; font-size:12px; max-height:320px; margin:0; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th, td { text-align:left; padding:5px 6px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--muted); font-weight:600; }
+  button.btn { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:9px 14px; font-weight:600; cursor:pointer; font-size:14px; }
+  button.btn.sec { background:#2b3140; } button.btn.ok { background:var(--ok);} button.btn.warn { background:var(--warn); color:#111; }
+  button.btn:disabled { opacity:.45; cursor:default; }
+  input[type=text], textarea, select, input[type=number] { background:#0b0d12; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px; font-size:14px; width:100%; }
+  textarea { min-height:70px; resize:vertical; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:8px 0; }
+  .row label { color:var(--muted); font-size:12.5px; }
+  .row input[type=number] { width:90px; }
+  .big { font-size:20px; line-height:1.5; padding:14px; border-radius:8px; background:#14261c; border:1px solid #2f6b47; min-height:60px; }
+  .big.err { background:#2b1717; border-color:#7a3333; }
+  .meta { color:var(--muted); font-size:12.5px; margin-top:6px; }
+  .kv { display:grid; grid-template-columns: auto 1fr; gap:4px 12px; font-size:13px; }
+  .kv div:nth-child(odd) { color:var(--muted); }
+  .badge { display:inline-block; padding:2px 8px; border-radius:6px; font-size:12px; font-weight:600; background:#2b3140; }
+  .badge.ok { background:#1d4d33; } .badge.warn { background:#5a4415; } .badge.bad { background:#5a2222; }
+  .dir { font-size:40px; font-weight:800; text-align:center; padding:10px; }
+  canvas { width:100%; background:#0b0d12; border:1px solid var(--line); border-radius:8px; display:block; }
+  .meter { height:18px; background:#0b0d12; border:1px solid var(--line); border-radius:6px; overflow:hidden; }
+  .meter > div { height:100%; background:linear-gradient(90deg, var(--ok), var(--warn), var(--bad)); width:0%; transition: width .15s; }
+  .hint { color:var(--muted); font-size:12.5px; line-height:1.5; }
+  details summary { cursor:pointer; color:var(--muted); margin:8px 0 6px; }
+  .log { font-family: ui-monospace, Consolas, monospace; font-size:12px; }
+  .log .ERROR { color:#ff7b7b; } .log .WARNING { color:#f0c060; } .log .INFO { color:#b8c0cc; }
+  .chips { display:flex; gap:6px; flex-wrap:wrap; }
+  .chips span { background:#2b3140; padding:2px 8px; border-radius:6px; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>VIAssist 모듈 점검</h1>
+  <span class="hint">젯슨 edge-desktop · 서버 uptime <b id="uptime">-</b></span>
+  <div class="sys" id="sysline">시스템 지표 로딩…</div>
+</header>
+<nav id="tabs">
+  <button data-tab="overview" class="active"><span class="dot" id="dot-overview"></span>개요</button>
+  <button data-tab="video"><span class="dot" id="dot-video"></span>영상 입력</button>
+  <button data-tab="yolo"><span class="dot" id="dot-yolo"></span>YOLO</button>
+  <button data-tab="flow"><span class="dot" id="dot-flow"></span>Optical Flow</button>
+  <button data-tab="vlm"><span class="dot" id="dot-vlm"></span>VLM</button>
+  <button data-tab="stt"><span class="dot" id="dot-stt"></span>STT</button>
+  <button data-tab="tts"><span class="dot" id="dot-tts"></span>TTS</button>
+  <button data-tab="pipeline"><span class="dot" id="dot-pipeline"></span>파이프라인 시간</button>
+  <button data-tab="errors"><span class="dot" id="dot-errors"></span>오류 <span class="badge bad" id="err-count" style="display:none">0</span></button>
+  <button data-tab="log"><span class="dot"></span>로그</button>
+</nav>
+<main>
+
+<!-- ============ 개요 ============ -->
+<section id="tab-overview" class="active">
+  <div class="grid g3" id="overview-cards"></div>
+  <div class="card" style="margin-top:14px">
+    <h3>원본 /test/health</h3>
+    <pre id="health-json">-</pre>
+  </div>
+</section>
+
+<!-- ============ YOLO ============ -->
+<section id="tab-yolo">
+  <div class="grid g2">
+    <div class="card">
+      <h3>실시간 카메라 (YOLO 박스 + 추적 ID)</h3>
+      <img class="stream" id="yolo-stream" alt="video_feed">
+      <div class="meta" id="yolo-meta">-</div>
+    </div>
+    <div class="card">
+      <h3>현재 탐지 (스냅샷 payload, 0.5초마다)</h3>
+      <div class="row">
+        <span class="badge" id="yolo-frame">frame -</span>
+        <span class="badge" id="yolo-latency">YOLO - ms</span>
+        <span class="badge" id="yolo-count">0개</span>
+      </div>
+      <table><thead><tr><th>클래스</th><th>conf</th><th>track</th><th>bbox</th><th>시계</th><th>면적</th><th>움직임</th></tr></thead>
+      <tbody id="yolo-dets"><tr><td colspan="7" class="hint">-</td></tr></tbody></table>
+      <details><summary>학습 클래스 목록</summary><div class="chips" id="yolo-classes"></div></details>
+    </div>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <h3>이미지 파일로 테스트 (카메라와 무관 · 별도 YOLO 인스턴스, 첫 요청 시 로드)</h3>
+    <div class="row">
+      <input type="file" id="yolo-file" accept="image/*">
+      <label>conf <input type="number" id="yolo-conf" value="0.25" step="0.05" min="0.05" max="0.95"></label>
+      <button class="btn" id="yolo-upload">탐지 실행</button>
+      <span class="meta" id="yolo-upload-meta"></span>
+    </div>
+    <div class="grid g2">
+      <img class="stream" id="yolo-upload-img" alt="" style="display:none">
+      <table><thead><tr><th>클래스</th><th>conf</th><th>bbox</th></tr></thead><tbody id="yolo-upload-dets"></tbody></table>
+    </div>
+  </div>
+</section>
+
+<!-- ============ FLOW ============ -->
+<section id="tab-flow">
+  <div class="grid g2">
+    <div class="card">
+      <h3>왼쪽: 원본 + flow 화살표 + 객체별 판정 · 오른쪽: 방향=색, 세기=밝기 (6fps)</h3>
+      <img class="stream" id="flow-stream" alt="flow">
+      <div class="hint" style="margin-top:6px">
+        색상환: <span style="color:#ff4d4d">■</span>오른쪽 <span style="color:#ffd84d">■</span>아래(→화면 기준 DOWN) <span style="color:#4dff88">■</span>왼쪽 <span style="color:#4d8dff">■</span>위(UP) — 검정은 정지.
+        탐지 객체가 없으면 engine 대신 전체 프레임 Farneback을 직접 계산합니다(field=own).
+      </div>
+    </div>
+    <div class="card">
+      <h3>주 객체 방향 판정</h3>
+      <div class="dir" id="flow-dir">-</div>
+      <div class="kv" id="flow-kv"></div>
+      <h3 style="margin-top:12px">dx / dy 추이 (최근 30초, 주 객체)</h3>
+      <canvas id="flow-chart" height="140"></canvas>
+      <div class="hint">주황=dy(음수=UP), 파랑=dx. 점선=direction_threshold.</div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <h3>객체별 움직임 (track 단위, 클래스별 히스토리 길이로 안정화)</h3>
+    <table><thead><tr><th>track</th><th>클래스</th><th>conf</th><th>raw</th><th>stable</th><th>ratio</th><th>hist</th><th>dx</th><th>dy</th><th>mag</th><th>m.conf</th><th>valid</th><th>ego</th><th>inliers</th></tr></thead>
+    <tbody id="flow-tracks"><tr><td colspan="14" class="hint">-</td></tr></tbody></table>
+  </div>
+</section>
+
+<!-- ============ VLM ============ -->
+<section id="tab-vlm">
+  <div class="grid g2">
+    <div class="card">
+      <h3>VLM에 들어가는 프레임 (YOLO가 돈 스냅샷 원본)</h3>
+      <img class="stream" id="vlm-frame" alt="">
+      <div class="row">
+        <button class="btn sec" id="vlm-refresh-frame">프레임 새로고침</button>
+        <span class="meta" id="vlm-frame-meta"></span>
+      </div>
+      <div class="kv" id="vlm-kv"></div>
+    </div>
+    <div class="card">
+      <h3>질의</h3>
+      <input type="text" id="vlm-query" placeholder="비우면 기본 질문 사용. 예: 앞에 뭐가 있어?">
+      <div class="row">
+        <button class="btn" id="vlm-scene">장면 설명 (describe_scene)</button>
+        <button class="btn sec" id="vlm-guide">상황 안내 (describe · YOLO 기반)</button>
+        <button class="btn sec" id="vlm-rule">규칙 안내 (VLM 없음)</button>
+      </div>
+      <div class="big" id="vlm-msg">아직 요청하지 않았습니다.</div>
+      <div class="meta" id="vlm-meta"></div>
+      <details><summary>응답 원문 JSON</summary><pre id="vlm-json">-</pre></details>
+      <h3 style="margin-top:12px">요청 이력</h3>
+      <table><thead><tr><th>시각</th><th>모드</th><th>ms</th><th>status</th><th>message</th></tr></thead><tbody id="vlm-hist"></tbody></table>
+    </div>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <h3>벤치마크 — 설정 전후 비교 (결과는 서버 파일에 남아 재시작해도 유지)</h3>
+    <div class="row">
+      <span class="badge" id="vlm-bench-label">현재 설정: -</span>
+      <label>호출 수 <input type="number" id="vlm-bench-n" value="3" min="1" max="10"></label>
+      <label>메모 <input type="text" id="vlm-bench-note" placeholder="예: 512로 변경 후" style="width:200px"></label>
+      <button class="btn" id="vlm-bench-run">벤치 실행 (장면 설명 연속 호출)</button>
+      <button class="btn sec" id="vlm-bench-clear">이력 삭제</button>
+      <span class="meta" id="vlm-bench-meta"></span>
+    </div>
+    <div class="hint">각 호출 전 DRAM 여유가 350MB 밑이면 자동 중단합니다(젯슨이 멈춘 적이 있음).</div>
+    <table style="margin-top:8px"><thead><tr><th>시각</th><th>설정</th><th>메모</th><th>호출</th><th>평균 ms</th><th>최소/최대</th><th>타임아웃</th><th>DRAM Δ/호출</th><th>DRAM 전→후</th><th>상태</th></tr></thead>
+    <tbody id="vlm-bench-hist"><tr><td colspan="10" class="hint">-</td></tr></tbody></table>
+    <details><summary>마지막 실행 상세</summary><pre id="vlm-bench-json">-</pre></details>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <h3>이미지 파일로 테스트 (카메라와 무관)</h3>
+    <div class="row">
+      <input type="file" id="vlm-file" accept="image/*">
+      <input type="text" id="vlm-file-query" placeholder="질문(선택)" style="max-width:360px">
+      <button class="btn" id="vlm-upload">장면 설명 실행</button>
+      <span class="meta" id="vlm-upload-meta"></span>
+    </div>
+    <div class="grid g2">
+      <img class="stream" id="vlm-upload-img" style="display:none" alt="">
+      <div><div class="big" id="vlm-upload-msg">-</div><details><summary>JSON</summary><pre id="vlm-upload-json">-</pre></details></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ STT ============ -->
+<section id="tab-stt">
+  <div class="grid g2">
+    <div class="card">
+      <h3>젯슨 마이크 → faster-whisper</h3>
+      <div class="kv" id="stt-kv"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn sec" id="stt-level-toggle">입력 레벨 미터 시작</button>
+        <div class="meter" style="flex:1; min-width:160px"><div id="stt-level-bar"></div></div>
+        <span class="meta" id="stt-level-txt">rms -</span>
+      </div>
+      <div class="row">
+        <label>최대 <input type="number" id="stt-max" value="8" step="1"> 초</label>
+        <label>발화 대기 <input type="number" id="stt-start" value="4" step="1"> 초</label>
+        <label>무음 종료 <input type="number" id="stt-silence" value="800" step="100"> ms</label>
+        <label>노이즈 배수 <input type="number" id="stt-mult" value="" step="0.1" placeholder="기본"></label>
+      </div>
+      <div class="row">
+        <button class="btn" id="stt-listen">🎤 말하고 인식 (VAD)</button>
+        <label>고정 <input type="number" id="stt-fixed-sec" value="4" step="1"> 초</label>
+        <button class="btn warn" id="stt-fixed">고정 길이 녹음 (마이크 점검)</button>
+      </div>
+      <div class="hint">VAD 모드는 버튼을 누른 뒤 <b>발화 대기 초 안에 말을 시작</b>해야 합니다. 노이즈 플로어×배수를 넘는 소리만 발화로 봅니다 — 인식이 안 되면 배수를 1.5~2.0으로 낮춰 보세요. 고정 길이는 임계값 없이 무조건 녹음하므로 마이크가 소리를 받는지 자체를 확인합니다.</div>
+    </div>
+    <div class="card">
+      <h3>결과</h3>
+      <div class="big" id="stt-text">-</div>
+      <div class="meta" id="stt-meta"></div>
+      <canvas id="stt-wave" height="90"></canvas>
+      <div class="row"><audio id="stt-audio" controls style="width:100%"></audio></div>
+      <div class="hint">위 파형·오디오는 <b>젯슨 마이크가 실제로 받은 소리</b>입니다. 소리가 안 들리면 마이크/장치 문제, 소리는 들리는데 텍스트가 틀리면 모델 문제로 분리해서 보세요.</div>
+      <details><summary>JSON</summary><pre id="stt-json">-</pre></details>
+    </div>
+  </div>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="card">
+      <h3>이 PC 마이크로 녹음해서 젯슨 모델만 테스트</h3>
+      <div class="row">
+        <button class="btn" id="stt-rec">● 브라우저 녹음 시작</button>
+        <button class="btn sec" id="stt-rec-stop" disabled>■ 정지 후 인식</button>
+        <span class="meta" id="stt-rec-meta"></span>
+      </div>
+      <div class="hint" id="stt-rec-hint"></div>
+      <div class="row"><input type="file" id="stt-file" accept="audio/*"><button class="btn sec" id="stt-file-go">파일 인식</button></div>
+      <div class="big" id="stt-up-text">-</div>
+      <div class="meta" id="stt-up-meta"></div>
+      <canvas id="stt-up-wave" height="70"></canvas>
+    </div>
+    <div class="card">
+      <h3>오디오 장치 목록 (sounddevice)</h3>
+      <table><thead><tr><th>#</th><th>이름</th><th>in</th><th>out</th><th>rate</th></tr></thead><tbody id="stt-devices"></tbody></table>
+    </div>
+  </div>
+</section>
+
+<!-- ============ TTS ============ -->
+<section id="tab-tts">
+  <div class="grid g2">
+    <div class="card">
+      <h3>MeloTTS(온디바이스) / gTTS 폴백</h3>
+      <div class="kv" id="tts-kv"></div>
+      <textarea id="tts-text" style="margin-top:10px">정면 12시 방향에 에스컬레이터가 있습니다. 올라가는 방향입니다.</textarea>
+      <div class="row">
+        <select id="tts-preset" style="max-width:420px">
+          <option value="">문장 프리셋…</option>
+          <option>정면 12시 방향에 에스컬레이터가 있습니다. 올라가는 방향입니다.</option>
+          <option>왼쪽 11시 방향에 엘리베이터 버튼이 있습니다.</option>
+          <option>사람이 오른쪽에서 다가오고 있습니다. 잠시 멈춰 주세요.</option>
+          <option>말씀을 알아듣지 못했습니다. 다시 말씀해 주세요.</option>
+          <option>이 문장은 캐시 확인용 문장입니다. 두 번째 요청은 캐시에서 나와야 합니다.</option>
+        </select>
+        <label><input type="checkbox" id="tts-play"> 젯슨 스피커에서도 재생</label>
+      </div>
+      <div class="row">
+        <button class="btn" id="tts-go">합성 → 브라우저에서 듣기</button>
+        <span class="meta" id="tts-meta"></span>
+      </div>
+      <div class="row"><audio id="tts-audio" controls style="width:100%"></audio></div>
+      <details><summary>JSON</summary><pre id="tts-json">-</pre></details>
+    </div>
+    <div class="card">
+      <h3>합성 이력</h3>
+      <table><thead><tr><th>시각</th><th>엔진</th><th>캐시</th><th>합성 ms</th><th>길이 s</th><th>젯슨 재생</th><th>문장</th></tr></thead><tbody id="tts-hist"></tbody></table>
+      <div class="hint" style="margin-top:8px">캐시 적중이면 합성 ms가 거의 0입니다. 같은 문장을 두 번 보내 캐시가 동작하는지, 젯슨 재생을 켜서 스피커(ALSA) 출력이 되는지, 브라우저 재생으로 음질을 각각 분리해 확인하세요.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ VIDEO SOURCE ============ -->
+<section id="tab-video">
+  <div class="card">
+    <div class="row">
+      <span class="badge" id="src-mode">소스: -</span>
+      <select id="src-list" style="width:auto;min-width:220px"></select>
+      <label><input type="checkbox" id="src-loop" checked> 반복</label>
+      <label>배속 <select id="src-speed" style="width:auto"><option>0.5</option><option selected>1</option><option>2</option></select></label>
+      <button class="btn" id="src-play-file">이 영상으로 실행</button>
+      <button class="btn sec" id="src-pause">일시정지</button>
+      <button class="btn sec" id="src-resume">재생</button>
+      <button class="btn sec" id="src-restart">처음부터</button>
+      <button class="btn warn" id="src-camera">실카메라로 복귀</button>
+      <span class="meta" id="src-meta"></span>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <input type="file" id="src-file" accept="video/*">
+      <button class="btn sec" id="src-upload">업로드</button>
+      <span class="meta" id="src-upload-meta"></span>
+      <span class="hint">녹화 영상을 실카메라 자리에 흘려 넣습니다. YOLO·Optical Flow·방향 판정·VLM 전부 그대로 동작하고, YOLO/Flow 탭도 이 영상을 보여줍니다.</span>
+    </div>
+    <div class="row" style="margin-top:6px"><input type="range" id="src-seek" min="0" max="100" value="0" style="flex:1"><span id="src-pos" style="width:180px;text-align:right">-</span></div>
+  </div>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="card">
+      <h3>처리 결과 (YOLO 박스 + flow 화살표 + 방향)</h3>
+      <img class="stream" id="src-stream" alt="video_feed">
+      <div class="big" id="src-dir">-</div>
+      <div class="kv" id="src-kv"></div>
+    </div>
+    <div class="card">
+      <h3>방향 판정 타임라인 (안정화된 판정)</h3>
+      <div class="hint">색: <span style="color:#3ddc84">■ UP</span> <span style="color:#ff7b7b">■ DOWN</span> <span style="color:#f5c542">■ STATIONARY</span> <span style="color:#8b5cf6">■ ANALYZING</span> <span style="color:#6b7280">■ NO_ESCALATOR</span> · 10Hz 샘플</div>
+      <div id="src-strip" style="display:flex;height:34px;margin:8px 0;border-radius:4px;overflow:hidden;background:#0b0d12"></div>
+      <div class="chips" id="src-counts"></div>
+      <table style="margin-top:8px"><thead><tr><th>구간 (초)</th><th>프레임</th><th>판정</th><th>샘플</th></tr></thead><tbody id="src-segments"></tbody></table>
+      <h3 style="margin-top:12px">Flow 시각화</h3>
+      <img class="stream" id="src-flow" alt="flow">
+    </div>
+  </div>
+</section>
+
+<!-- ============ PIPELINE ============ -->
+<section id="tab-pipeline">
+  <div class="grid g2">
+    <div class="card">
+      <h3>실제 안내 경로를 한 번 돌리며 단계별 시간 측정</h3>
+      <div class="hint">(마이크 STT) → 스냅샷 → [YOLO·Flow는 처리 루프가 이미 계산한 값의 실측치] → VLM 또는 규칙 → TTS 합성 → (젯슨 재생). YOLO/Flow는 요청과 무관하게 루프에서 계속 돌기 때문에 "그 프레임에 실제로 걸린 시간"으로 표시하고 합계(동기)에는 넣지 않습니다.</div>
+      <div class="row" style="margin-top:10px">
+        <label><input type="radio" name="pl-mode" value="auto" checked> <b>자동 라우터</b> (규칙 / VLM 상태 / VLM 장면 중 선택)</label>
+        <label><input type="radio" name="pl-mode" value="scene"> VLM 장면 설명 강제</label>
+        <label><input type="radio" name="pl-mode" value="guidance"> VLM 상황 안내 강제</label>
+        <label><input type="radio" name="pl-mode" value="rule"> 규칙 강제</label>
+      </div>
+      <div class="hint">라우터 규칙: 질문에 상태 단어(열렸/작동/표시/글자…) → VLM 상태 질문 · 장면/주변/위험 단어 → VLM 장면 설명 · 그 외엔 YOLO 최우선 탐지가 signal(문 상태·표시등·신호등)이면 VLM 상태 질문, 다른 클래스면 규칙(0ms), 탐지 없으면 VLM 장면 설명.</div>
+      <div class="row"><span class="badge" id="pl-route">경로: -</span><span class="meta" id="pl-route-reason"></span></div>
+      <div class="row">
+        <label><input type="checkbox" id="pl-mic"> 마이크로 질문 받기(STT 포함)</label>
+        <label><input type="checkbox" id="pl-play"> 젯슨 스피커 재생 포함</label>
+      </div>
+      <input type="text" id="pl-query" placeholder="텍스트 질문(마이크 미사용 시, 비우면 기본 질문)">
+      <div class="row">
+        <button class="btn" id="pl-run">파이프라인 실행</button>
+        <span class="meta" id="pl-meta"></span>
+      </div>
+      <div class="big" id="pl-msg">-</div>
+      <div class="row"><audio id="pl-audio" controls style="width:100%"></audio></div>
+    </div>
+    <div class="card">
+      <h3>단계별 소요 시간 (워터폴)</h3>
+      <div id="pl-bars"></div>
+      <table style="margin-top:10px"><thead><tr><th>단계</th><th>ms</th><th>비고</th></tr></thead><tbody id="pl-table"></tbody></table>
+      <h3 style="margin-top:12px">실행 이력</h3>
+      <table><thead><tr><th>시각</th><th>모드</th><th>경로</th><th>STT</th><th>VLM/규칙</th><th>TTS</th><th>재생</th><th>동기 합계</th></tr></thead><tbody id="pl-hist"></tbody></table>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ERRORS ============ -->
+<section id="tab-errors">
+  <div class="card">
+    <div class="row">
+      <span class="badge" id="err-total">누적 0</span>
+      <span id="err-by-module" class="chips"></span>
+      <label>모듈 <select id="err-module" style="width:auto"><option value="">전체</option><option>yolo</option><option>flow</option><option>vlm</option><option>stt</option><option>tts</option><option>pipeline</option><option>system</option><option>dashboard</option></select></label>
+      <button class="btn sec" id="err-refresh">새로고침</button>
+      <button class="btn warn" id="err-clear">기록 삭제</button>
+      <span class="meta" id="err-meta"></span>
+    </div>
+    <div class="hint">서버 파일 <code id="err-file">reports/module_test_errors.jsonl</code>에 영구 기록됩니다. 출처: <b>route</b>=/test API 예외 · <b>log</b>=기존 코드의 LOGGER.exception/ERROR · <b>thread</b>=처리 루프·카메라 스레드 미처리 예외 · <b>browser</b>=이 페이지 JS 오류. 처리 루프 상태: <span id="err-liveness">-</span></div>
+    <table style="margin-top:8px"><thead><tr><th>시각</th><th>모듈</th><th>출처</th><th>위치</th><th>타입</th><th>메시지</th><th>id</th></tr></thead>
+    <tbody id="err-rows"><tr><td colspan="7" class="hint">-</td></tr></tbody></table>
+  </div>
+</section>
+
+<!-- ============ LOG ============ -->
+<section id="tab-log">
+  <div class="card">
+    <div class="row">
+      <label>레벨 <select id="log-level" style="width:auto"><option>INFO</option><option>WARNING</option><option selected>ERROR</option></select></label>
+      <span class="hint">서버 프로세스의 파이썬 로그(최근 400건 링버퍼). werkzeug 접근 로그는 제외.</span>
+    </div>
+    <pre class="log" id="log-body" style="max-height:70vh">-</pre>
+  </div>
+</section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (v, d=2) => (v === null || v === undefined) ? '-' : (typeof v === 'number' ? v.toFixed(d) : String(v));
+const now = () => new Date().toLocaleTimeString('ko-KR', {hour12:false});
+async function getJSON(url, opts) {
+  const r = await fetch(url, opts);
+  const data = await r.json().catch(() => ({error: `HTTP ${r.status}`}));
+  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
+}
+function kv(el, obj) { el.innerHTML = Object.entries(obj).map(([k,v]) => `<div>${k}</div><div>${v}</div>`).join(''); }
+function setDot(id, state) { const d = $(id); if (d) d.className = 'dot ' + state; }
+
+// ---------------- 탭 ----------------
+let active = 'overview';
+const timers = {};
+function stopTab(name) {
+  (timers[name] || []).forEach(clearInterval); timers[name] = [];
+  if (name === 'yolo') $('yolo-stream').src = '';
+  if (name === 'flow') $('flow-stream').src = '';
+  if (name === 'stt') stopLevel();
+}
+function startTab(name) {
+  timers[name] = [];
+  if (name === 'overview') { refreshHealth(); timers[name].push(setInterval(refreshHealth, 3000)); }
+  if (name === 'yolo') { $('yolo-stream').src = '/video_feed?' + Date.now(); pollYolo(); timers[name].push(setInterval(pollYolo, 500)); }
+  if (name === 'video') { $('src-stream').src = '/video_feed?' + Date.now(); $('src-flow').src = '/test/flow/stream?' + Date.now(); loadSource(); pollSource(); timers[name].push(setInterval(pollSource, 500)); }
+  if (name === 'flow') { $('flow-stream').src = '/test/flow/stream?' + Date.now(); pollFlow(); timers[name].push(setInterval(pollFlow, 300)); }
+  if (name === 'vlm') { refreshVlmFrame(); refreshHealth(); loadBenchHistory(); }
+  if (name === 'stt') { refreshHealth(); loadDevices(); }
+  if (name === 'tts') { refreshHealth(); }
+  if (name === 'pipeline') { refreshHealth(); }
+  if (name === 'errors') { refreshHealth().then(loadErrors); timers[name].push(setInterval(loadErrors, 5000)); }
+  if (name === 'log') { pollLog(); timers[name].push(setInterval(pollLog, 2000)); }
+}
+$('tabs').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  const name = b.dataset.tab; if (name === active) return;
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x === b));
+  document.querySelectorAll('main section').forEach(s => s.classList.toggle('active', s.id === 'tab-' + name));
+  stopTab(active); active = name; startTab(name);
+});
+
+// ---------------- 개요 / health ----------------
+let health = null;
+async function refreshHealth() {
+  try {
+    health = await getJSON('/test/health');
+  } catch (e) { $('sysline').textContent = '서버 연결 실패: ' + e.message; return; }
+  const h = health, s = h.system;
+  $('uptime').textContent = Math.round(h.uptime_s / 60) + '분';
+  const cuda = s.cuda_this_process || {};
+  $('sysline').innerHTML =
+    `<span title="Jetson은 CPU와 GPU가 DRAM 하나를 나눠 씁니다. 별도 VRAM 없음.">DRAM(통합, CPU+GPU 공유) 여유 <b>${s.mem_available_mb ?? '-'}</b>/${s.mem_total_mb ?? '-'} MB</span>` +
+    ` · 그중 CUDA(이 프로세스) <b>${cuda.allocated_mb ?? '-'}</b> MB · 스왑(zram) ${s.swap_used_mb ?? '-'}/${s.swap_total_mb ?? '-'} MB` +
+    ` · GPU 사용률 <b>${s.gpu_load_pct ?? '-'}%</b> · ` + Object.entries(s.temps_c || {}).map(([k,v]) => `${k} ${v.toFixed(0)}°`).join(' ');
+  $('health-json').textContent = JSON.stringify(h, null, 2);
+  updateErrorBadge(h);
+
+  const yoloOk = h.yolo.camera_ok && h.yolo.processing_fps > 1 && !(h.liveness && h.liveness.loop_stalled);
+  setDot('dot-yolo', yoloOk ? 'ok' : 'bad');
+  setDot('dot-flow', yoloOk ? (h.flow.motion_source ? 'ok' : 'warn') : 'bad');
+  setDot('dot-vlm', h.vlm.enabled ? (h.vlm.busy ? 'warn' : 'ok') : 'bad');
+  setDot('dot-stt', h.stt.enabled ? (h.stt.busy ? 'warn' : 'ok') : 'bad');
+  setDot('dot-tts', h.tts.enabled ? (h.tts.engine === 'melo' && h.tts.melo_alive ? 'ok' : 'warn') : 'bad');
+  setDot('dot-overview', (s.mem_available_mb ?? 9999) < 400 ? 'warn' : 'ok');
+
+  const badge = (ok, txt) => `<span class="badge ${ok === true ? 'ok' : ok === false ? 'bad' : 'warn'}">${txt}</span>`;
+  $('overview-cards').innerHTML = `
+    <div class="card"><h3>YOLO</h3>${badge(yoloOk, yoloOk ? '동작 중' : '카메라/추론 문제')}
+      <div class="kv" style="margin-top:8px"><div>모델</div><div>${h.yolo.model}</div><div>클래스</div><div>${h.yolo.classes}</div>
+      <div>FPS</div><div>${h.yolo.processing_fps}</div><div>추론</div><div>${h.yolo.yolo_inference_ms} ms (every ${h.yolo.yolo_every})</div>
+      <div>device/imgsz/conf</div><div>${h.yolo.device} / ${h.yolo.imgsz} / ${h.yolo.conf}</div></div></div>
+    <div class="card"><h3>Optical Flow</h3>${badge(yoloOk, h.flow.stable_direction || '-')}
+      <div class="kv" style="margin-top:8px"><div>ego 보정</div><div>${h.flow.motion_source || '(탐지 없음)'}</div><div>계산 시간</div><div>${fmt(h.flow.flow_ms_ema,1)} ms/frame (최근 ${fmt(h.flow.flow_ms_last,1)})</div><div>flow 폭</div><div>${h.flow.flow_width}px</div>
+      <div>임계값</div><div>${h.flow.direction_threshold} px/frame</div><div>안정화</div><div>${h.flow.direction_history}프레임 · ${h.flow.direction_majority}</div></div></div>
+    <div class="card"><h3>VLM</h3>${badge(h.vlm.enabled ? !h.vlm.busy : false, h.vlm.enabled ? (h.vlm.busy ? '추론 중' : '대기') : '비활성')}
+      <div class="kv" style="margin-top:8px"><div>모델</div><div>${h.vlm.model_id ?? '-'}</div><div>요청 수</div><div>${h.vlm.request_count}</div>
+      <div>timeout</div><div>${h.vlm.timeout_s}s</div><div>config</div><div>${(h.vlm.config||'').split('/').pop()} · edge ${h.vlm.config_values?.image_longest_edge ?? '-'} / tile ${h.vlm.config_values?.max_image_size ?? '-'} / tok ${h.vlm.config_values?.max_new_tokens ?? '-'}</div></div></div>
+    <div class="card"><h3>STT</h3>${badge(h.stt.enabled ? !h.stt.busy : false, h.stt.enabled ? (h.stt.busy ? '녹음 중' : '대기') : '비활성')}
+      <div class="kv" style="margin-top:8px"><div>모델</div><div>faster-whisper ${h.stt.model_size ?? '-'} (${h.stt.language})</div>
+      <div>입력 장치</div><div>#${h.stt.input_device ?? '-'} ${h.stt.input_device_name ?? ''}</div><div>레이트</div><div>${h.stt.native_rate} → 16000 Hz</div>
+      <div>노이즈</div><div>floor ${h.stt.last_noise_floor ?? '-'} × ${h.stt.noise_multiplier} → ${fmt(h.stt.last_speech_threshold,0)}</div></div></div>
+    <div class="card"><h3>TTS</h3>${badge(h.tts.enabled ? (h.tts.engine === 'melo' ? !!h.tts.melo_alive : null) : false, h.tts.enabled ? h.tts.engine + (h.tts.engine==='melo' ? (h.tts.melo_alive ? ' (워커 살아있음)' : ' (워커 죽음!)') : ' (클라우드 폴백)') : '비활성')}
+      <div class="kv" style="margin-top:8px"><div>재생기</div><div>${h.tts.player ?? '없음'}${h.tts.alsa_device ? ' -D ' + h.tts.alsa_device : ''}</div>
+      <div>speaker</div><div>${h.tts.melo_speaker ?? '-'} · 로드 ${fmt(h.tts.melo_load_ms,0)} ms</div>
+      <div>폴백 사유</div><div>${h.tts.engine_error ?? '-'}</div></div></div>
+    <div class="card"><h3>시스템 메모리 — ${s.memory_kind || 'DRAM'}</h3>${badge((s.mem_available_mb ?? 9999) > 400, `DRAM 여유 ${s.mem_available_mb} / ${s.mem_total_mb} MB`)}
+      <div class="kv" style="margin-top:8px">
+      <div>종류</div><div><b>통합 DRAM</b> — CPU·GPU가 같은 물리 메모리를 씀. VRAM이 따로 없으므로 모델 가중치·CUDA 텐서도 이 숫자에서 빠져나감</div>
+      <div>CUDA(이 프로세스)</div><div>allocated ${cuda.allocated_mb ?? '-'} MB · reserved ${cuda.reserved_mb ?? '-'} MB · peak ${cuda.max_allocated_mb ?? '-'} MB (YOLO+VLM; MeloTTS 워커는 별도 프로세스라 미포함)</div>
+      <div>스왑(zram)</div><div>${s.swap_used_mb}/${s.swap_total_mb} MB</div><div>GPU 사용률</div><div>${s.gpu_load_pct ?? '-'} %</div>
+      <div>온도</div><div>${Object.entries(s.temps_c||{}).map(([k,v]) => `${k} ${v.toFixed(0)}°`).join(' · ')}</div></div></div>`;
+
+  if (h.yolo.class_names) $('yolo-classes').innerHTML = h.yolo.class_names.map(c => `<span>${c}</span>`).join('');
+  kv($('vlm-kv'), {'모델': h.vlm.model_id ?? '-', 'busy': h.vlm.busy, '요청 수': h.vlm.request_count, 'timeout': h.vlm.timeout_s + 's',
+                    'image_longest_edge': h.vlm.config_values?.image_longest_edge ?? '-', 'max_image_size(타일)': h.vlm.config_values?.max_image_size ?? '-', 'max_new_tokens': h.vlm.config_values?.max_new_tokens ?? '-'});  kv($('stt-kv'), {'모델': `faster-whisper ${h.stt.model_size} (cpu/int8)`, '입력 장치': `#${h.stt.input_device} ${h.stt.input_device_name ?? ''}`,
+                    '샘플레이트': `${h.stt.native_rate} → 16000`, '노이즈 플로어(최근)': h.stt.last_noise_floor ?? '-', '발화 임계값(최근)': fmt(h.stt.last_speech_threshold,0), '기본 배수': h.stt.noise_multiplier});
+  kv($('tts-kv'), {'엔진': h.tts.engine ?? '-', 'Melo 워커': h.tts.melo_alive === null ? '-' : (h.tts.melo_alive ? '살아있음' : '종료됨'), 'speaker': h.tts.melo_speaker ?? '-',
+                    '재생기': h.tts.player ?? '없음', 'ALSA': h.tts.alsa_device ?? '기본', '속도': h.tts.speed, '캐시': h.tts.cache_dir, '폴백 사유': h.tts.engine_error ?? '-'});
+}
+
+// ---------------- YOLO ----------------
+async function pollYolo() {
+  try {
+    const p = await getJSON('/perception_payload');
+    const y = p.yolo_payload, dets = y.detections || [];
+    $('yolo-frame').textContent = 'frame ' + p.frame_id;
+    $('yolo-latency').textContent = 'YOLO ' + fmt(y.latency_ms, 1) + ' ms';
+    $('yolo-count').textContent = dets.length + '개';
+    $('yolo-meta').textContent = `${y.image_width}x${y.image_height} · payload ok=${y.ok}`;
+    $('yolo-dets').innerHTML = dets.length ? dets.map(d =>
+      `<tr><td><b>${d.cls_name}</b></td><td>${fmt(d.conf)}</td><td>${d.track_id ?? '-'}</td><td>${[d.x1,d.y1,d.x2,d.y2].map(v=>Math.round(v)).join(', ')}</td><td>${d.clock}시</td><td>${fmt(d.area_ratio*100,1)}%</td>
+       <td>${d.motion ? `${d.motion.direction} (${fmt(d.motion.confidence)})` : '-'}</td></tr>`).join('')
+      : '<tr><td colspan="7" class="hint">탐지 없음</td></tr>';
+  } catch (e) { $('yolo-meta').textContent = e.message; }
+}
+$('yolo-upload').addEventListener('click', async () => {
+  const f = $('yolo-file').files[0]; if (!f) { alert('이미지를 고르세요'); return; }
+  const fd = new FormData(); fd.append('file', f); fd.append('conf', $('yolo-conf').value);
+  $('yolo-upload').disabled = true; $('yolo-upload-meta').textContent = '추론 중… (첫 요청은 모델 로드 포함)';
+  try {
+    const r = await getJSON('/test/yolo/image', {method:'POST', body: fd});
+    $('yolo-upload-img').src = r.annotated; $('yolo-upload-img').style.display = 'block';
+    $('yolo-upload-meta').textContent = `${r.inference_ms} ms · ${r.image_size.join('x')} · conf≥${r.conf} · ${r.detections.length}개`;
+    $('yolo-upload-dets').innerHTML = r.detections.map(d => `<tr><td><b>${d.class_name}</b></td><td>${fmt(d.confidence)}</td><td>${d.bbox.join(', ')}</td></tr>`).join('') || '<tr><td colspan="3" class="hint">탐지 없음</td></tr>';
+  } catch (e) { $('yolo-upload-meta').textContent = '오류: ' + e.message; }
+  finally { $('yolo-upload').disabled = false; }
+});
+
+// ---------------- FLOW ----------------
+const flowHist = [];
+async function pollFlow() {
+  try {
+    const r = await getJSON('/test/flow/stats');
+    const s = r.status;
+    const dir = s.stable_direction;
+    $('flow-dir').textContent = {UP:'⬆ UP', DOWN:'⬇ DOWN', LEFT:'⬅ LEFT', RIGHT:'➡ RIGHT', STATIONARY:'⏹ STATIONARY'}[dir] || dir;
+    $('flow-dir').style.color = {UP:'#4d8dff', DOWN:'#ffd84d', STATIONARY:'#9aa3b2', UNCERTAIN:'#d9a441', ANALYZING:'#9aa3b2', NO_ESCALATOR:'#666'}[dir] || '#ff7b7b';
+    kv($('flow-kv'), {'주 객체': s.escalator_detected ? `${s.class_name} (${fmt(s.confidence)}) track ${r.primary_track_id ?? '-'}` : '없음',
+      'raw → stable': `${s.raw_direction} → ${s.stable_direction} (${r.stable_frames}프레임 유지)`,
+      'dx / dy': `${fmt(s.motion_dx)} / ${fmt(s.motion_dy)} px/frame`, '세기': fmt(s.motion_magnitude), '방향 신뢰도': fmt(s.direction_confidence),
+      'ego 보정': s.motion_source || '-', 'FPS': fmt(s.processing_fps,1), 'flow 계산 시간': health ? `${fmt(health.flow.flow_ms_ema,1)} ms/frame` : '-'});
+    flowHist.push({t: Date.now(), dx: s.motion_dx, dy: s.motion_dy}); while (flowHist.length && Date.now() - flowHist[0].t > 30000) flowHist.shift();
+    drawFlowChart();
+    $('flow-tracks').innerHTML = r.tracks.length ? r.tracks.map(t =>
+      `<tr><td>${t.track_id ?? '-'}${t.track_id === r.primary_track_id ? ' ★' : ''}</td><td><b>${t.class_name}</b></td><td>${fmt(t.confidence)}</td><td>${t.direction ?? '-'}</td><td><b>${t.stable_direction ?? '-'}</b></td>
+       <td>${fmt(t.stable_ratio)}</td><td>${t.history_size ?? '-'}</td><td>${fmt(t.dx)}</td><td>${fmt(t.dy)}</td><td>${fmt(t.magnitude)}</td><td>${fmt(t.motion_confidence)}</td><td>${fmt(t.valid_ratio)}</td><td>${t.motion_source ?? '-'}</td><td>${t.homography_inliers ?? '-'}</td></tr>`).join('')
+      : '<tr><td colspan="14" class="hint">탐지된 객체 없음 → flow는 전체 프레임(own)으로만 시각화됩니다</td></tr>';
+  } catch (e) { $('flow-dir').textContent = e.message; }
+}
+function drawFlowChart() {
+  const c = $('flow-chart'); const W = c.width = c.clientWidth, H = c.height; const ctx = c.getContext('2d');
+  ctx.clearRect(0,0,W,H); const thr = health ? health.flow.direction_threshold : 0.55;
+  const maxAbs = Math.max(2, thr*2, ...flowHist.map(p => Math.max(Math.abs(p.dx), Math.abs(p.dy))));
+  const y = v => H/2 - (v / maxAbs) * (H/2 - 6);
+  ctx.strokeStyle = '#333'; ctx.beginPath(); ctx.moveTo(0, H/2); ctx.lineTo(W, H/2); ctx.stroke();
+  ctx.setLineDash([4,4]); ctx.strokeStyle = '#555'; [thr, -thr].forEach(v => { ctx.beginPath(); ctx.moveTo(0,y(v)); ctx.lineTo(W,y(v)); ctx.stroke(); }); ctx.setLineDash([]);
+  if (flowHist.length < 2) return;
+  const t0 = flowHist[0].t, span = Math.max(1, Date.now() - t0);
+  const line = (key, color) => { ctx.strokeStyle = color; ctx.lineWidth = 1.6; ctx.beginPath();
+    flowHist.forEach((p, i) => { const x = (p.t - t0) / span * W; i ? ctx.lineTo(x, y(p[key])) : ctx.moveTo(x, y(p[key])); }); ctx.stroke(); };
+  line('dx', '#4d8dff'); line('dy', '#ff9f43');
+  ctx.fillStyle = '#9aa3b2'; ctx.font = '11px sans-serif'; ctx.fillText(`±${maxAbs.toFixed(1)} px/frame`, 6, 12);
+}
+
+// ---------------- VLM ----------------
+async function refreshVlmFrame() {
+  const r = await fetch('/test/vlm/frame.jpg?' + Date.now());
+  if (!r.ok) { $('vlm-frame-meta').textContent = '프레임 없음'; return; }
+  const blob = await r.blob(); $('vlm-frame').src = URL.createObjectURL(blob);
+  $('vlm-frame-meta').textContent = `frame_id ${r.headers.get('X-Frame-Id')} · 탐지 ${r.headers.get('X-Detections')}개 · ${now()}`;
+}
+$('vlm-refresh-frame').addEventListener('click', refreshVlmFrame);
+function vlmHist(mode, ms, status, msg) {
+  const tr = document.createElement('tr'); tr.innerHTML = `<td>${now()}</td><td>${mode}</td><td>${fmt(ms,0)}</td><td>${status ?? '-'}</td><td style="white-space:normal">${msg}</td>`;
+  $('vlm-hist').prepend(tr);
+}
+async function vlmCall(url, mode, body) {
+  ['vlm-scene','vlm-guide','vlm-rule'].forEach(id => $(id).disabled = true);
+  $('vlm-msg').className = 'big'; $('vlm-msg').textContent = '분석 중…'; $('vlm-meta').textContent = '';
+  const t0 = performance.now();
+  try {
+    await refreshVlmFrame();
+    const r = await getJSON(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const ms = performance.now() - t0;
+    $('vlm-msg').textContent = r.message || '(message 없음)';
+    $('vlm-meta').textContent = `${mode} · 왕복 ${ms.toFixed(0)} ms · 서버 ${r.request_latency_ms ?? r.render_ms ?? '-'} ms · status=${r.status ?? r.mode ?? r.source ?? '-'} · service=${r.service_status ?? '-'} · model=${r.model_id ?? '-'} · fallback=${r.fallback_reason ?? r.reason ?? '-'}`;
+    $('vlm-json').textContent = JSON.stringify(r, null, 2);
+    vlmHist(mode, ms, r.status ?? r.mode ?? r.source, r.message);
+  } catch (e) {
+    $('vlm-msg').className = 'big err'; $('vlm-msg').textContent = '오류: ' + e.message; vlmHist(mode, performance.now() - t0, 'error', e.message);
+  } finally { ['vlm-scene','vlm-guide','vlm-rule'].forEach(id => $(id).disabled = false); refreshHealth(); }
+}
+const q = () => { const v = $('vlm-query').value.trim(); return v ? {query: v} : {}; };
+$('vlm-scene').addEventListener('click', () => vlmCall('/vlm/describe_scene', 'scene', q()));
+$('vlm-guide').addEventListener('click', () => vlmCall('/vlm/describe', 'guidance', q()));
+$('vlm-rule').addEventListener('click', () => vlmCall('/guide', 'rule', {}));
+$('vlm-upload').addEventListener('click', async () => {
+  const f = $('vlm-file').files[0]; if (!f) { alert('이미지를 고르세요'); return; }
+  const fd = new FormData(); fd.append('file', f); if ($('vlm-file-query').value.trim()) fd.append('query', $('vlm-file-query').value.trim());
+  $('vlm-upload-img').src = URL.createObjectURL(f); $('vlm-upload-img').style.display = 'block';
+  $('vlm-upload').disabled = true; $('vlm-upload-meta').textContent = '추론 중…'; $('vlm-upload-msg').textContent = '…';
+  const t0 = performance.now();
+  try {
+    const r = await getJSON('/test/vlm/image', {method:'POST', body: fd});
+    $('vlm-upload-msg').textContent = r.message || '(message 없음)';
+    $('vlm-upload-meta').textContent = `왕복 ${(performance.now()-t0).toFixed(0)} ms · 서버 ${r.request_latency_ms} ms · ${r.mode ?? r.status ?? ''} · ${r.model_id ?? ''}`;
+    $('vlm-upload-json').textContent = JSON.stringify(r, null, 2);
+  } catch (e) { $('vlm-upload-msg').textContent = '오류: ' + e.message; $('vlm-upload-meta').textContent = ''; }
+  finally { $('vlm-upload').disabled = false; }
+});
+
+// ---------------- 영상 입력 ----------------
+const DIR_COLOR = {UP:'#3ddc84', DOWN:'#ff7b7b', STATIONARY:'#f5c542', NO_ESCALATOR:'#6b7280', UNKNOWN:'#8b5cf6'};
+let seeking = false;
+async function srcPost(path, body) {
+  const r = await getJSON(path, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body || {})});
+  renderSource(r); return r;
+}
+function renderSource(r) {
+  const v = r.video;
+  $('src-mode').textContent = r.mode === 'video' ? `소스: 영상 ${v.name}` : (r.camera_connected === false ? `소스: 실카메라 #${r.camera_index} — 연결 안 됨 (USB 카메라를 꽂고 "실카메라로 복귀"를 누르면 재연결)` : `소스: 실카메라 #${r.camera_index}`);
+  $('src-mode').className = 'badge ' + (r.mode === 'video' ? 'ok' : (r.camera_connected === false ? 'bad' : ''));
+  setDot('dot-video', r.mode === 'video' ? 'ok' : 'idle');
+  if (v) {
+    $('src-meta').textContent = `${v.width}x${v.height} · ${v.fps}fps · ${v.frame_count}프레임 (${v.duration_s}s) · ${v.speed}x · ${v.paused ? (v.finished ? '끝남' : '일시정지') : '재생 중'} · 반복 ${v.loops_done}회`;
+    if (!seeking) { $('src-seek').max = Math.max(1, v.frame_count - 1); $('src-seek').value = v.position; }
+    $('src-pos').textContent = `${v.position_s ?? 0}s / ${v.duration_s ?? 0}s (프레임 ${v.position})`;
+  } else { $('src-meta').textContent = ''; $('src-pos').textContent = '-'; }
+  if (r.videos) {
+    const cur = $('src-list').value;
+    $('src-list').innerHTML = r.videos.length ? r.videos.map(x => `<option value="${x.name}">${x.name} (${x.size_mb} MB)</option>`).join('') : '<option value="">(업로드된 영상 없음)</option>';
+    if (cur && r.videos.some(x => x.name === cur)) $('src-list').value = cur;
+  }
+}
+async function loadSource() { try { renderSource(await getJSON('/test/source')); } catch (e) { $('src-meta').textContent = e.message; } }
+async function pollSource() {
+  try {
+    const s = await getJSON('/status');
+    $('src-dir').textContent = `${s.stable_direction}  (raw ${s.raw_direction}) · ${s.class_name || '탐지 없음'} ${s.confidence ? (s.confidence*100).toFixed(0) + '%' : ''}`;
+    $('src-dir').style.color = DIR_COLOR[s.stable_direction] || 'var(--text)';
+    kv($('src-kv'), {'motion dy': fmt(s.motion_dy,2), 'magnitude': fmt(s.motion_magnitude,2), 'direction conf': fmt(s.direction_confidence,2), 'ego 보정': s.motion_source || '-', 'FPS': fmt(s.processing_fps,1), 'YOLO ms': fmt(s.yolo_inference_ms,1)});
+    const t = await getJSON('/test/source/timeline');
+    if (t.video) renderSource({mode:'video', video:t.video, camera_index:null});
+    const total = t.segments.reduce((a, g) => a + g.n, 0) || 1;
+    $('src-strip').innerHTML = t.segments.map(g => `<div title="${g.stable} ${g.start_t}s~${g.end_t}s" style="width:${g.n/total*100}%;background:${DIR_COLOR[g.stable] || '#8b5cf6'}"></div>`).join('');
+    $('src-counts').innerHTML = Object.entries(t.counts).map(([k,v]) => `<span style="color:${DIR_COLOR[k] || 'inherit'}">${k}: ${(v/ (t.total||1)*100).toFixed(0)}% (${v})</span>`).join('');
+    $('src-segments').innerHTML = t.segments.slice(-40).reverse().map(g => `<tr><td>${g.start_t} ~ ${g.end_t}${g.loop ? ` (반복 ${g.loop})` : ''}</td><td>${g.start_pos} ~ ${g.end_pos}</td><td style="color:${DIR_COLOR[g.stable] || 'inherit'}"><b>${g.stable}</b></td><td>${g.n}</td></tr>`).join('') || '<tr><td colspan="4" class="hint">영상 모드에서 샘플이 쌓입니다</td></tr>';
+  } catch (e) { /* 폴링 오류는 조용히 */ }
+}
+$('src-play-file').addEventListener('click', async () => {
+  const name = $('src-list').value; if (!name) return alert('먼저 영상을 업로드하세요.');
+  try { await srcPost('/test/source/video', {name, loop: $('src-loop').checked, speed: +$('src-speed').value}); $('src-stream').src = '/video_feed?' + Date.now(); }
+  catch (e) { $('src-meta').textContent = '오류: ' + e.message; }
+});
+$('src-pause').addEventListener('click', () => srcPost('/test/source/control', {action:'pause'}).catch(e => $('src-meta').textContent = e.message));
+$('src-resume').addEventListener('click', () => srcPost('/test/source/control', {action:'play'}).catch(e => $('src-meta').textContent = e.message));
+$('src-restart').addEventListener('click', () => srcPost('/test/source/control', {action:'restart'}).catch(e => $('src-meta').textContent = e.message));
+$('src-loop').addEventListener('change', () => srcPost('/test/source/control', {action:'loop', loop: $('src-loop').checked}).catch(() => {}));
+$('src-camera').addEventListener('click', async () => { try { await srcPost('/test/source/camera'); $('src-stream').src = '/video_feed?' + Date.now(); } catch (e) { $('src-meta').textContent = e.message; } });
+$('src-seek').addEventListener('mousedown', () => seeking = true);
+$('src-seek').addEventListener('change', async () => { seeking = false; try { await srcPost('/test/source/control', {action:'seek', frame: +$('src-seek').value}); } catch (e) { $('src-meta').textContent = e.message; } });
+$('src-upload').addEventListener('click', async () => {
+  const f = $('src-file').files[0]; if (!f) return alert('영상 파일을 고르세요.');
+  const fd = new FormData(); fd.append('file', f); $('src-upload-meta').textContent = `업로드 중… (${(f.size/2**20).toFixed(1)} MB)`;
+  try { const r = await getJSON('/test/source/upload', {method:'POST', body: fd}); $('src-upload-meta').textContent = `업로드 완료: ${r.name}`; renderSource({mode:'-', video:null, videos:r.videos}); $('src-list').value = r.name; }
+  catch (e) { $('src-upload-meta').textContent = '오류: ' + e.message; }
+});
+
+// ---------------- VLM 벤치 ----------------
+function renderBench(runs, currentLabel) {
+  $('vlm-bench-label').textContent = '현재 설정: ' + (currentLabel || '-');
+  $('vlm-bench-hist').innerHTML = runs.length ? runs.slice().reverse().map(r => {
+    const s = r.summary || {}; const cur = r.label === currentLabel;
+    return `<tr style="${cur ? 'background:#1a2433' : ''}"><td>${new Date(r.ts*1000).toLocaleString('ko-KR',{hour12:false})}</td><td><b>${r.label}</b>${cur ? ' ◀ 현재' : ''}</td><td>${r.note || ''}</td>
+      <td>${s.calls ?? 0}</td><td><b>${fmt(s.avg_ms,0)}</b></td><td>${fmt(s.min_ms,0)} / ${fmt(s.max_ms,0)}</td><td>${s.timeouts ?? 0}</td>
+      <td style="color:${(s.mem_delta_per_call_mb ?? 0) < -150 ? '#ff7b7b' : 'inherit'}">${fmt(s.mem_delta_per_call_mb,0)} MB</td>
+      <td>${r.mem_before?.mem_available_mb ?? '-'} → ${r.mem_after?.mem_available_mb ?? '-'} MB</td><td>${r.aborted ? '<span class="badge bad">중단</span> ' + r.aborted : (r.calls||[]).map(c => c.status).join(',')}</td></tr>`;
+  }).join('') : '<tr><td colspan="10" class="hint">아직 벤치 기록 없음</td></tr>';
+}
+async function loadBenchHistory() {
+  try { const r = await getJSON('/test/vlm/bench/history'); renderBench(r.runs, r.current_label); } catch (e) { $('vlm-bench-meta').textContent = e.message; }
+}
+$('vlm-bench-run').addEventListener('click', async () => {
+  $('vlm-bench-run').disabled = true; $('vlm-bench-meta').textContent = '벤치 실행 중… (호출당 수 초)';
+  try {
+    const r = await getJSON('/test/vlm/bench', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({calls: +$('vlm-bench-n').value, note: $('vlm-bench-note').value, mode: 'scene'})});
+    $('vlm-bench-json').textContent = JSON.stringify(r, null, 2);
+    $('vlm-bench-meta').textContent = `완료: 평균 ${fmt(r.summary.avg_ms,0)} ms · 타임아웃 ${r.summary.timeouts} · DRAM Δ ${fmt(r.summary.mem_delta_per_call_mb,0)} MB/호출` + (r.aborted ? ' · ' + r.aborted : '');
+    await loadBenchHistory(); refreshHealth();
+  } catch (e) { $('vlm-bench-meta').textContent = '오류: ' + e.message; }
+  finally { $('vlm-bench-run').disabled = false; }
+});
+$('vlm-bench-clear').addEventListener('click', async () => { if (!confirm('벤치 이력을 모두 지울까요?')) return; await fetch('/test/vlm/bench/history', {method:'DELETE'}); loadBenchHistory(); });
+
+// ---------------- 파이프라인 ----------------
+$('pl-run').addEventListener('click', async () => {
+  const mode = document.querySelector('input[name=pl-mode]:checked').value;
+  const body = {mode, use_mic: $('pl-mic').checked, play: $('pl-play').checked, query: $('pl-query').value.trim() || null};
+  $('pl-run').disabled = true; $('pl-msg').className = 'big'; $('pl-msg').textContent = body.use_mic ? '듣는 중… 지금 말하세요' : '실행 중…'; $('pl-meta').textContent = '';
+  const t0 = performance.now();
+  try {
+    const r = await getJSON('/test/pipeline/run', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const rt = performance.now() - t0;
+    $('pl-msg').textContent = (r.heard_text ? `들은 말: "${r.heard_text}" → ` : '') + (r.message || '(안내 문장 없음)');
+    $('pl-meta').textContent = `서버 총 ${r.total_ms} ms (동기 단계 합 ${r.sync_ms} ms) · 브라우저 왕복 ${rt.toFixed(0)} ms · DRAM 여유 ${r.mem.mem_available_mb} MB` + (r.vlm && r.vlm.status ? ` · VLM status=${r.vlm.status}` : '');
+    if (r.spoken && r.spoken.audio_url) { $('pl-audio').src = r.spoken.audio_url + '?' + Date.now(); }
+    const ROUTE_KO = {rule: '규칙 (VLM 없음)', vlm_state: 'VLM 상태 질문', vlm_scene: 'VLM 장면 설명'};
+    const route = r.route && r.route.route ? r.route.route : (mode === 'auto' ? '-' : mode);
+    $('pl-route').textContent = '경로: ' + (ROUTE_KO[route] || route);
+    $('pl-route').className = 'badge ' + (route === 'rule' ? 'ok' : route.startsWith('vlm') ? 'warn' : '');
+    $('pl-route-reason').textContent = r.route && r.route.reason ? r.route.reason + (r.route.target ? ` · 탐지: ${r.route.target.korean} ${(r.route.target.confidence*100).toFixed(0)}%` : '') : '';
+    const maxMs = Math.max(1, ...r.stages.map(s => s.ms));
+    $('pl-bars').innerHTML = r.stages.map(s => `<div class="row" style="margin:3px 0"><div style="width:230px;font-size:12.5px;color:${s.async_in_loop ? 'var(--muted)' : 'var(--text)'}">${s.stage}</div>
+      <div style="flex:1;height:16px;background:#0b0d12;border-radius:4px;overflow:hidden"><div style="width:${Math.max(0.5, s.ms/maxMs*100)}%;height:100%;background:${s.error ? 'var(--bad)' : s.async_in_loop ? '#3a4150' : 'var(--accent)'}"></div></div>
+      <div style="width:80px;text-align:right;font-weight:600">${fmt(s.ms,0)} ms</div></div>`).join('');
+    $('pl-table').innerHTML = r.stages.map(s => { const {stage, ms, async_in_loop, ...rest} = s; return `<tr><td>${stage}</td><td><b>${fmt(ms,0)}</b></td><td style="white-space:normal;color:var(--muted)">${Object.entries(rest).map(([k,v]) => `${k}=${v}`).join(' · ')}${async_in_loop ? ' (루프 측정, 합계 제외)' : ''}</td></tr>`; }).join('');
+    const pick = (pfx) => { const s = r.stages.filter(x => x.stage.startsWith(pfx)); return s.length ? s.reduce((a,b) => a + b.ms, 0) : null; };
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${now()}</td><td>${mode}${body.use_mic ? '+mic' : ''}</td><td>${ROUTE_KO[route] || route}</td><td>${fmt(pick('STT'),0)}</td><td>${fmt(pick('VLM') ?? pick('규칙'),0)}</td><td>${fmt(pick('TTS 합성'),0)}</td><td>${fmt(pick('TTS 재생'),0)}</td><td><b>${r.sync_ms}</b></td>`;
+    $('pl-hist').prepend(tr);
+  } catch (e) { $('pl-msg').className = 'big err'; $('pl-msg').textContent = '오류: ' + e.message; }
+  finally { $('pl-run').disabled = false; refreshHealth(); }
+});
+
+// ---------------- STT ----------------
+let levelTimer = null;
+function stopLevel() { if (levelTimer) { clearInterval(levelTimer); levelTimer = null; $('stt-level-toggle').textContent = '입력 레벨 미터 시작'; } }
+$('stt-level-toggle').addEventListener('click', () => {
+  if (levelTimer) { stopLevel(); return; }
+  $('stt-level-toggle').textContent = '레벨 미터 정지';
+  const tick = async () => { try { const r = await getJSON('/test/stt/level');
+      const pct = Math.min(100, Math.log10(1 + r.rms) / Math.log10(32768) * 100);
+      $('stt-level-bar').style.width = pct + '%'; $('stt-level-txt').textContent = `rms ${r.rms} · peak ${r.peak}`;
+    } catch (e) { $('stt-level-txt').textContent = e.message; } };
+  tick(); levelTimer = setInterval(tick, 600);
+});
+function drawWave(canvasId, env) {
+  const c = $(canvasId); const W = c.width = c.clientWidth, H = c.height; const ctx = c.getContext('2d'); ctx.clearRect(0,0,W,H);
+  if (!env || !env.length) { ctx.fillStyle = '#555'; ctx.fillText('오디오 없음', 8, 16); return; }
+  const max = Math.max(1, ...env); ctx.fillStyle = '#4c8dff';
+  env.forEach((v, i) => { const h = v / 32768 * H; const x = i / env.length * W; ctx.fillRect(x, H/2 - h/2, Math.max(1, W/env.length - 0.5), Math.max(1, h)); });
+  ctx.fillStyle = '#9aa3b2'; ctx.font = '11px sans-serif'; ctx.fillText(`peak ${max} / 32768 (${(max/32768*100).toFixed(0)}%)`, 6, 12);
+  if (health && health.stt.last_speech_threshold) { const thr = health.stt.last_speech_threshold / 32768 * H; ctx.strokeStyle = '#d9a441'; ctx.setLineDash([3,3]);
+    ctx.beginPath(); ctx.moveTo(0, H/2 - thr/2); ctx.lineTo(W, H/2 - thr/2); ctx.moveTo(0, H/2 + thr/2); ctx.lineTo(W, H/2 + thr/2); ctx.stroke(); ctx.setLineDash([]); }
+}
+async function sttListen(body) {
+  stopLevel(); ['stt-listen','stt-fixed'].forEach(id => $(id).disabled = true);
+  $('stt-text').className = 'big'; $('stt-text').textContent = body.mode === 'fixed' ? `${body.seconds}초 녹음 중…` : '듣는 중… 지금 말하세요';
+  $('stt-meta').textContent = '';
+  try {
+    const r = await getJSON('/test/stt/listen', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    $('stt-text').textContent = r.text ? r.text : (r.heard_speech ? '(소리는 받았지만 인식 결과 없음)' : '말소리를 감지하지 못했습니다 (임계값 미달)');
+    $('stt-meta').textContent = `${r.mode} · 오디오 ${r.audio_seconds}s · 녹음 ${fmt(r.record_ms,0)} ms · 인식 ${fmt(r.transcribe_ms,0)} ms · 모델 ${r.model_size} · 노이즈 floor ${r.noise_floor ?? '-'} → 임계 ${fmt(r.speech_threshold,0)}`;
+    $('stt-json').textContent = JSON.stringify({...r, audio_b64: r.audio_b64 ? '(생략)' : null, envelope: '(생략)'}, null, 2);
+    await refreshHealth(); drawWave('stt-wave', r.envelope);
+    if (r.audio_b64) { $('stt-audio').src = r.audio_b64; } else { $('stt-audio').removeAttribute('src'); }
+  } catch (e) { $('stt-text').className = 'big err'; $('stt-text').textContent = '오류: ' + e.message; }
+  finally { ['stt-listen','stt-fixed'].forEach(id => $(id).disabled = false); }
+}
+$('stt-listen').addEventListener('click', () => sttListen({mode:'vad', max_seconds:+$('stt-max').value, start_timeout_s:+$('stt-start').value, silence_ms:+$('stt-silence').value, noise_multiplier: $('stt-mult').value ? +$('stt-mult').value : null}));
+$('stt-fixed').addEventListener('click', () => sttListen({mode:'fixed', seconds:+$('stt-fixed-sec').value}));
+
+// 브라우저 마이크
+let recorder = null, chunks = [];
+if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+  $('stt-rec-hint').innerHTML = '이 페이지는 http(비보안) 주소라 브라우저가 마이크를 막습니다. PC에서 <code>ssh -L 5000:localhost:5000 edge@100.95.201.95</code> 후 <code>http://localhost:5000/test</code>로 열면 됩니다. 아래 파일 인식은 그대로 됩니다.';
+  $('stt-rec').disabled = true;
+}
+$('stt-rec').addEventListener('click', async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    chunks = []; recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = e => chunks.push(e.data);
+    recorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(chunks, {type: recorder.mimeType || 'audio/webm'});
+      await sttUpload(blob, 'browser.' + ((recorder.mimeType||'webm').includes('ogg') ? 'ogg' : 'webm'));
+    };
+    recorder.start(); $('stt-rec').disabled = true; $('stt-rec-stop').disabled = false; $('stt-rec-meta').textContent = '녹음 중… 말한 뒤 정지를 누르세요';
+  } catch (e) { $('stt-rec-meta').textContent = '마이크 접근 실패: ' + e.message; }
+});
+$('stt-rec-stop').addEventListener('click', () => { if (recorder && recorder.state !== 'inactive') recorder.stop(); $('stt-rec').disabled = false; $('stt-rec-stop').disabled = true; });
+$('stt-file-go').addEventListener('click', () => { const f = $('stt-file').files[0]; if (!f) { alert('오디오 파일을 고르세요'); return; } sttUpload(f, f.name); });
+async function sttUpload(blob, name) {
+  const fd = new FormData(); fd.append('file', blob, name);
+  $('stt-up-text').className = 'big'; $('stt-up-text').textContent = '업로드·변환·인식 중…'; $('stt-rec-meta').textContent = '';
+  try {
+    const r = await getJSON('/test/stt/upload', {method:'POST', body: fd});
+    $('stt-up-text').textContent = r.text || '(인식 결과 없음)';
+    $('stt-up-meta').textContent = `오디오 ${r.audio_seconds}s · 변환 ${fmt(r.convert_ms,0)} ms · 인식 ${fmt(r.transcribe_ms,0)} ms · 모델 ${r.model_size}`;
+    drawWave('stt-up-wave', r.envelope);
+  } catch (e) { $('stt-up-text').className = 'big err'; $('stt-up-text').textContent = '오류: ' + e.message; }
+}
+async function loadDevices() {
+  try { const r = await getJSON('/test/audio/devices');
+    $('stt-devices').innerHTML = r.devices.filter(d => d.in > 0 || d.index < 5).map(d => `<tr><td>${d.index}${health && health.stt.input_device === d.index ? ' ◀ STT' : ''}</td><td>${d.name}</td><td>${d.in}</td><td>${d.out}</td><td>${d.default_samplerate}</td></tr>`).join('');
+  } catch (e) { $('stt-devices').innerHTML = `<tr><td colspan="5">${e.message}</td></tr>`; }
+}
+
+// ---------------- TTS ----------------
+$('tts-preset').addEventListener('change', () => { if ($('tts-preset').value) $('tts-text').value = $('tts-preset').value; });
+$('tts-go').addEventListener('click', async () => {
+  const text = $('tts-text').value.trim(); if (!text) return;
+  $('tts-go').disabled = true; $('tts-meta').textContent = '합성 중…';
+  const t0 = performance.now();
+  try {
+    const r = await getJSON('/test/tts/synth', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text, play: $('tts-play').checked})});
+    $('tts-meta').textContent = `왕복 ${(performance.now()-t0).toFixed(0)} ms · 엔진 ${r.engine} · ${r.cached ? '캐시 적중' : '새로 합성'} ${fmt(r.synthesize_ms,0)} ms · 오디오 ${r.audio_seconds ?? '-'} s` + ($('tts-play').checked ? ` · 젯슨 재생 ${r.spoken ? '성공' : '실패: ' + r.play_error} (${fmt(r.play_ms,0)} ms)` : '');
+    $('tts-json').textContent = JSON.stringify(r, null, 2);
+    if (r.audio_url) { $('tts-audio').src = r.audio_url + '?' + Date.now(); $('tts-audio').play().catch(() => {}); }
+    const tr = document.createElement('tr'); tr.innerHTML = `<td>${now()}</td><td>${r.engine}</td><td>${r.cached ? '○' : '-'}</td><td>${fmt(r.synthesize_ms,0)}</td><td>${r.audio_seconds ?? '-'}</td><td>${$('tts-play').checked ? (r.spoken ? '성공' : '실패') : '안 함'}</td><td style="white-space:normal">${text}</td>`;
+    $('tts-hist').prepend(tr);
+  } catch (e) { $('tts-meta').textContent = '오류: ' + e.message; }
+  finally { $('tts-go').disabled = false; }
+});
+
+// ---------------- 오류 ----------------
+function updateErrorBadge(h) {
+  const e = h.errors || {}; const n = e.stored || 0;
+  $('err-count').style.display = n ? '' : 'none'; $('err-count').textContent = n;
+  setDot('dot-errors', n ? 'bad' : 'ok');
+  const lv = h.liveness || {};
+  if (lv.loop_stalled || !lv.processing_thread_alive) setDot('dot-yolo', 'bad');
+}
+async function loadErrors() {
+  try {
+    const mod = $('err-module').value;
+    const r = await getJSON('/test/errors?n=200' + (mod ? '&module=' + mod : ''));
+    const s = r.summary;
+    $('err-total').textContent = `저장 ${s.stored}건 · 기동 후 ${s.total_since_start}건`;
+    $('err-by-module').innerHTML = Object.entries(s.by_module || {}).map(([k,v]) => `<span>${k}: ${v}</span>`).join('');
+    $('err-file').textContent = s.file;
+    if (health && health.liveness) { const lv = health.liveness;
+      $('err-liveness').innerHTML = `처리 스레드 ${lv.processing_thread_alive ? '살아있음' : '<b style="color:#ff7b7b">죽음</b>'} · 카메라 스레드 ${lv.camera_thread_alive ? '살아있음' : '<b style="color:#ff7b7b">죽음</b>'} · status 갱신 ${lv.status_age_s}s 전${lv.loop_stalled ? ' <b style="color:#ff7b7b">(멈춤)</b>' : ''} · 루프 예외 ${lv.loop_error_count}회${lv.loop_last_error ? ' (' + lv.loop_last_error + ')' : ''}`; }
+    $('err-rows').innerHTML = r.errors.length ? r.errors.slice().reverse().map(e => {
+      const extra = e.extra && Object.keys(e.extra).length ? JSON.stringify(e.extra) : '';
+      return `<tr><td>${e.iso}</td><td><b>${e.module}</b></td><td>${e.source}</td><td>${e.where}</td><td>${e.type ?? '-'}</td>
+        <td style="white-space:normal;max-width:520px">${String(e.message).replace(/</g,'&lt;')}${e.traceback || extra ? `<details><summary>상세</summary><pre style="max-height:260px">${(extra ? '요청: ' + extra + '\n\n' : '') + String(e.traceback || '').replace(/</g,'&lt;')}</pre></details>` : ''}</td><td class="hint">${e.id}</td></tr>`;
+    }).join('') : '<tr><td colspan="7" class="hint">기록된 오류 없음</td></tr>';
+  } catch (e) { $('err-meta').textContent = e.message; }
+}
+$('err-refresh').addEventListener('click', loadErrors);
+$('err-module').addEventListener('change', loadErrors);
+$('err-clear').addEventListener('click', async () => { if (!confirm('오류 기록 파일을 비울까요?')) return; await fetch('/test/errors', {method:'DELETE'}); loadErrors(); refreshHealth(); });
+// 이 페이지의 JS 오류도 서버 파일에 남긴다(fetch 실패는 각 핸들러가 화면에 표시하므로 제외).
+function reportClientError(where, message, stack) {
+  try { fetch('/test/errors/client', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({where, message, stack, tab: active})}); } catch (_) {}
+}
+window.addEventListener('error', (ev) => reportClientError(`${ev.filename || 'page'}:${ev.lineno || 0}`, ev.message, ev.error && ev.error.stack));
+window.addEventListener('unhandledrejection', (ev) => { const r = ev.reason || {}; if (String(r.message || r).includes('Failed to fetch')) return; reportClientError('promise', r.message || String(r), r.stack); });
+
+// ---------------- LOG ----------------
+async function pollLog() {
+  try { const r = await getJSON('/test/log?n=200&level=' + $('log-level').value);
+    $('log-body').innerHTML = r.records.map(x => `<span class="${x.level}">${new Date(x.ts*1000).toLocaleTimeString('ko-KR',{hour12:false})} ${x.level.padEnd(7)} ${x.logger}: ${x.msg.replace(/</g,'&lt;')}</span>`).join('\n') || '(해당 레벨 로그 없음)';
+  } catch (e) { $('log-body').textContent = e.message; }
+}
+$('log-level').addEventListener('change', pollLog);
+
+startTab('overview');
+</script>
+</body>
+</html>

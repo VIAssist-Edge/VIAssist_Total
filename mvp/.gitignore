@@ -7,3 +7,6 @@ __pycache__/
 snapshots/
 outputs/
 *.log
+# Stage 1 검증용 원본 CSV는 용량이 크고 환경마다 달라 추적하지 않는다.
+# 요약 markdown(reports/stage1/summary.md)은 추적 대상이다.
+reports/stage1/*.csv

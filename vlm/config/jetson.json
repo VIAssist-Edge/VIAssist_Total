@@ -6,6 +6,6 @@
     "max_new_tokens": 60,
     "use_mock_model": false,
     "model_id": "HuggingFaceTB/SmolVLM-500M-Instruct",
-    "image_longest_edge": 1024,
+    "image_longest_edge": 512,
     "max_image_size": 512
 }

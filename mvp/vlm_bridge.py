@@ -157,3 +157,52 @@ class VLMBridge:
         )
         result["user_query"] = query
         return result
+
+    def describe_scene(
+        self,
+        *,
+        frame: Any,
+        user_query: Optional[str] = None,
+        wait: bool = False,
+    ) -> dict[str, Any]:
+        """YOLO/Optical Flow와 무관하게 현재 프레임 전체를 설명한다.
+
+        `describe()`와 달리 elevator_button/escalator 탐지가 없어도 되며,
+        SUPPORTED_TARGETS 밖의 객체(사람, 차량 등)도 안내에 포함될 수 있다.
+        문장 형식·과잉 주장 차단은 `describe()`와 동일하게 유지된다.
+        """
+
+        if frame is None:
+            raise ValueError("추론할 프레임이 아직 준비되지 않았습니다.")
+        query = self.normalize_query(user_query)
+
+        if not self._lock.acquire(blocking=wait):
+            raise VLMBusyError("이전 VLM 요청이 아직 처리 중입니다.")
+
+        started = time.perf_counter()
+        try:
+            with TemporaryDirectory(prefix="viassist_vlm_scene_") as temp_dir:
+                image_path = Path(temp_dir) / "frame.jpg"
+                encoded_ok, encoded = cv2.imencode(
+                    ".jpg",
+                    frame,
+                    [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality],
+                )
+                if not encoded_ok:
+                    raise RuntimeError("캡처 이미지를 인코딩하지 못했습니다.")
+                image_path.write_bytes(encoded.tobytes())
+
+                result = self.pipeline.process_scene_description(
+                    image_path=image_path,
+                    user_query=query,
+                    timeout_seconds=self.timeout_seconds,
+                )
+            self.request_count += 1
+        finally:
+            self._lock.release()
+
+        result["request_latency_ms"] = round(
+            (time.perf_counter() - started) * 1000, 2
+        )
+        result["user_query"] = query
+        return result

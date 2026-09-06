@@ -35,6 +35,33 @@ TTS에 적합한 평서형 안내 종결과 사용자 질문 반복 여부를 �
 합니다. `validation_reasons`, `used_fallback`, `message_source`로 교체 여부와 이유를
 확인할 수 있습니다.
 
+## 주변 장면 설명 모드 (scene_description)
+
+`elevator_button`/`escalator` 안내는 YOLO detection과 대조하는 Safety
+Validator를 거치므로, `SUPPORTED_TARGETS`(`vlm/src/safety_rules.py`) 밖의
+객체(사람, 차량, 자전거 등)는 metadata 단계에서 필터링되어 사라지고
+`"목표 객체를 확인하기 어렵습니다..."` fallback만 나옵니다. 화면에 사람만
+있어도 실제 상황을 설명받고 싶을 때는 이 fallback 대신
+`VLMService.describe_scene()` 경로를 씁니다.
+
+- YOLO/Optical Flow metadata와 대조하지 않으므로 사람·차량 등도 언급할 수 있음
+- 문장 형식과 과잉 주장 차단(질문형, 안전 판단, 거리 추측, 강한 행동 지시,
+  2문장 초과 등)은 기존 Safety Validator와 동일하게 유지
+- 검증 실패나 VLM 오류 시 `"주변 상황을 정확히 설명하기 어렵습니다."`로 대체
+
+```python
+result = pipeline.process_scene_description(
+    image_path=image_path,
+    user_query="주변 상황을 설명해줘.",
+    timeout_seconds=10,
+)
+```
+
+MVP에서는 `VLMBridge.describe_scene()` / `POST /vlm/describe_scene`
+(`mvp/escalator_mvp.py`)과 `mvp/vlm_webcam_test.py`의 "주변 장면 설명 모드"
+패널로 확인할 수 있습니다. `dev_describe`와 달리 안전 검증을 거치므로
+`message`를 그대로 TTS에 사용할 수 있습니다.
+
 ## 실행
 
 모델을 로드하지 않는 mock 실행:

@@ -38,6 +38,10 @@ CLASS_ALIASES = {
     "escalator": "escalator",
     "moving_stairs": "escalator",
     "moving-stairs": "escalator",
+    # mvp/best.pt(2026-08-16 교체본)의 실제 escalator 탐지 클래스명.
+    # s_button/s_display/disp_up/disp_down 등 나머지 클래스는 의미가
+    # 확인되기 전까지 매핑하지 않는다.
+    "escalator falling": "escalator",
 }
 
 POSITION_ALIASES = {
@@ -310,16 +314,28 @@ def _normalize_yolo(
             if position_value is not None
             else _position_from_bbox(bbox, width)
         )
-        normalized_class = CLASS_ALIASES.get(class_name.strip().lower())
-        if normalized_class is not None:
-            normalized.append(
-                {
-                    "class_name": normalized_class,
-                    "confidence": confidence,
-                    "bbox": bbox,
-                    "position": position,
-                }
-            )
+        raw_class = class_name.strip().lower()
+        # 별칭에 없는 클래스도 버리지 않는다. YOLO가 내는 모든 클래스를
+        # 안내 대상으로 삼되 이름만 표준형(소문자·밑줄)으로 통일한다.
+        normalized_class = CLASS_ALIASES.get(
+            raw_class, raw_class.replace(" ", "_").replace("-", "_")
+        )
+        entry = {
+            "class_name": normalized_class,
+            "confidence": confidence,
+            "bbox": bbox,
+            "position": position,
+        }
+        # 객체별 움직임이 있으면 그대로 싣는다. 없으면 키를 만들지 않는다.
+        detection_motion = detection.get("motion")
+        if isinstance(detection_motion, dict):
+            direction = str(detection_motion.get("direction", "unknown"))
+            entry["motion"] = {
+                "available": bool(detection_motion.get("available", False)),
+                "direction": direction if direction else "unknown",
+                "speed": detection_motion.get("speed", "unknown"),
+            }
+        normalized.append(entry)
 
     normalized.sort(key=lambda item: item["confidence"], reverse=True)
     return source, normalized

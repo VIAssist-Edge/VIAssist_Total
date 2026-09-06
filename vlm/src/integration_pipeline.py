@@ -21,6 +21,7 @@ from src.perception_adapter import (
     build_perception_unavailable_result,
     is_flow_usable,
 )
+from src.scene_description import DEFAULT_SCENE_QUERY
 from src.vlm_service import VLMService
 
 
@@ -127,5 +128,25 @@ class VIAssistVLMPipeline:
         return self.service.infer_safe(
             image_path,
             metadata,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def process_scene_description(
+        self,
+        *,
+        image_path: Path | None,
+        user_query: str = DEFAULT_SCENE_QUERY,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        """YOLO SUPPORTED_TARGETS와 무관하게 화면 전체를 설명한다.
+
+        elevator_button·escalator 전용 Safety Validator(위치·방향 일치 검증)
+        대신 문장 형식·과잉 주장만 막는 별도 검증을 거친다. 사람, 차량 등
+        SUPPORTED_TARGETS 밖의 객체도 언급될 수 있다.
+        """
+
+        return self.service.describe_scene(
+            image_path,
+            user_query,
             timeout_seconds=timeout_seconds,
         )

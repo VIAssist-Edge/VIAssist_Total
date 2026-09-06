@@ -26,6 +26,9 @@ import numpy as np
 from flask import Flask, Response, jsonify, render_template_string, request
 from ultralytics import YOLO
 
+from background_motion import derotate_background_motion
+from motion_log import MotionLogWriter, build_motion_log_row
+from class_rules import history_for
 from perception_payload import build_flow_payload, build_yolo_payload
 
 
@@ -44,9 +47,13 @@ class RuntimeStatus:
     motion_dy: float = 0.0
     motion_magnitude: float = 0.0
     direction_confidence: float = 0.0
+    motion_source: str = ""
     processing_fps: float = 0.0
     yolo_inference_ms: float = 0.0
     timestamp: float = 0.0
+    # 처리 루프에서 잡힌 예외 누적 수와 마지막 메시지(대시보드 확인용).
+    error_count: int = 0
+    last_error: str = ""
 
 
 class LatestFrameCamera:
@@ -71,7 +78,11 @@ class LatestFrameCamera:
     def _open_camera(self) -> None:
         capture = cv2.VideoCapture(self.camera_index)
         if not capture.isOpened():
-            raise RuntimeError(f"카메라를 열 수 없습니다: index={self.camera_index}")
+            # 카메라가 없어도 서버는 떠야 한다(영상 입력 모드·다른 모듈 점검이 가능하도록).
+            # 리더 루프는 capture가 None이면 대기만 한다. 상태는 camera_ok=False로 남는다.
+            LOGGER.error("카메라를 열 수 없습니다: index=%d — 캡처 없이 기동합니다(영상 입력 모드로 대체 가능)", self.camera_index)
+            self._capture = None
+            return
 
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
@@ -150,7 +161,13 @@ class DirectionStabilizer:
 class EscalatorMVP:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
-        self.model = YOLO(args.model)
+        # TensorRT 엔진(.engine)은 task를 메타데이터에서 못 읽는 경우가 있어
+        # 명시한다. .pt는 기존대로 자동 판별에 맡긴다.
+        self.model = (
+            YOLO(args.model, task="detect")
+            if str(args.model).endswith(".engine")
+            else YOLO(args.model)
+        )
         self.class_names: dict[int, str] = self.model.names
 
         self.camera = LatestFrameCamera(
@@ -169,7 +186,15 @@ class EscalatorMVP:
         self.processing_thread: Optional[threading.Thread] = None
 
         self.previous_gray_small: Optional[np.ndarray] = None
+        # Stage 1 ego-motion 보정: 배경 feature로 카메라 움직임을 추정한다.
+        # 매 프레임 새로 만들지 않고 재사용해 오버헤드를 줄인다.
+        self.orb_detector = cv2.ORB_create(nfeatures=500)
+        # 실측 검증용 CSV 로거. --motion-log가 없으면 비활성 상태로 둔다.
+        self.motion_log_writer: Optional[MotionLogWriter] = (
+            MotionLogWriter(args.motion_log) if getattr(args, "motion_log", None) else None
+        )
         self.last_detections: list[dict[str, Any]] = []
+        self.primary_track_id: Optional[int] = None
         self.frame_index = 0
         self.direction_stabilizer = DirectionStabilizer(
             history_size=args.direction_history,
@@ -180,14 +205,22 @@ class EscalatorMVP:
         # 이렇게 해야 VLM에 전달하는 이미지와 detection payload가 같은 프레임이다.
         self.snapshot_lock = threading.Lock()
         self.latest_snapshot: Optional[dict[str, Any]] = None
+        # 객체(track_id)마다 별도 안정화기를 둔다. 히스토리 길이는 클래스가
+        # 정한다 — 에스컬레이터는 길게(오판 방지), 사람·차량은 짧게(반응 속도).
+        self.track_stabilizers: dict[int, DirectionStabilizer] = {}
         self.vlm_bridge: Any = None
+        self.voice: Any = None
         self.stable_frames = 0
         self.previous_stable_direction = ""
+        self.error_count = 0
+        self.last_error = ""
 
     def start(self) -> None:
         LOGGER.info("YOLO classes: %s", self.class_names)
         if getattr(self.args, "enable_vlm", False):
             self._start_vlm()
+        if getattr(self.args, "enable_voice", False):
+            self._start_voice()
         self.camera.start()
         self.processing_thread = threading.Thread(target=self._processing_loop, daemon=True)
         self.processing_thread.start()
@@ -204,6 +237,15 @@ class EscalatorMVP:
         )
         LOGGER.info("VLM 로딩 완료: %s", self.vlm_bridge.model_id)
 
+    def _start_voice(self) -> None:
+        """STT/TTS 모델도 프로세스 시작 시 한 번만 로드한다."""
+
+        from voice_endpoints import VoiceServices  # 지연 import: 음성 미사용 실행 지원
+
+        LOGGER.info("음성 모듈 로딩 중 (STT=%s)", self.args.stt_model)
+        self.voice = VoiceServices.from_args(self.args)
+        LOGGER.info("음성 모듈 로딩 완료")
+
     def stop(self) -> None:
         """여러 번 호출해도 안전하다."""
 
@@ -214,6 +256,8 @@ class EscalatorMVP:
         if self.processing_thread and self.processing_thread.is_alive():
             self.processing_thread.join(timeout=2.0)
         self.processing_thread = None
+        if self.motion_log_writer is not None:
+            self.motion_log_writer.close()
 
     def get_snapshot(self) -> Optional[dict[str, Any]]:
         """최신 프레임과 동기화된 Perception payload 묶음을 반환한다."""
@@ -240,6 +284,62 @@ class EscalatorMVP:
             user_query=user_query,
         )
 
+    def request_vlm_scene_description(self, user_query: Optional[str]) -> dict[str, Any]:
+        """YOLO/Optical Flow와 무관하게 현재 프레임 전체를 설명한다.
+
+        elevator_button/escalator 탐지가 없어도 동작하며, 사람·차량 등
+        SUPPORTED_TARGETS 밖의 객체도 안내에 포함될 수 있다.
+        """
+
+        if self.vlm_bridge is None:
+            raise RuntimeError("VLM이 비활성화되어 있습니다. --enable-vlm으로 실행하세요.")
+        snapshot = self.get_snapshot()
+        if snapshot is None:
+            raise RuntimeError("아직 분석된 프레임이 없습니다.")
+        return self.vlm_bridge.describe_scene(
+            frame=snapshot["frame"],
+            user_query=user_query,
+        )
+
+    def build_rule_guidance(self, *, max_items: int = 2) -> dict[str, Any]:
+        """VLM 없이 탐지 결과만으로 안내 문장을 만든다.
+
+        모델 호출이 없으므로 지연이 사실상 0이다. 학습된 33개 클래스
+        안에서는 이 경로만으로 충분하고, VLM은 학습 범위 밖일 때만 쓴다.
+        """
+
+        import time as _time
+
+        from class_rules import build_guidance
+
+        started = _time.perf_counter()
+        snapshot = self.get_snapshot()
+        snapshot_ms = (_time.perf_counter() - started) * 1000
+
+        if snapshot is None:
+            return {
+                "message": "아직 분석된 프레임이 없습니다.",
+                "source": "rule",
+                "detections": 0,
+                "snapshot_ms": round(snapshot_ms, 3),
+                "render_ms": 0.0,
+            }
+
+        detections = snapshot["yolo_payload"].get("detections", [])
+        started = _time.perf_counter()
+        message = build_guidance(detections, max_items=max_items)
+        render_ms = (_time.perf_counter() - started) * 1000
+
+        return {
+            "message": message,
+            "source": "rule",
+            "frame_id": snapshot["frame_id"],
+            "detections": len(detections),
+            "objects": [d.get("class_name") for d in detections][:6],
+            "snapshot_ms": round(snapshot_ms, 3),
+            "render_ms": round(render_ms, 3),
+        }
+
     def get_status(self) -> dict[str, Any]:
         with self.status_lock:
             return asdict(self.status)
@@ -249,6 +349,29 @@ class EscalatorMVP:
             return self.latest_jpeg
 
     def _processing_loop(self) -> None:
+        """프레임 하나의 예외로 루프 전체가 죽지 않게 한다.
+
+        예외는 traceback과 함께 로그(→ 대시보드 오류 기록)에 남기고, flow
+        이전 프레임을 버린 뒤 잠시 쉬었다가 루프를 다시 시작한다.
+        """
+
+        while not self.stop_event.is_set():
+            try:
+                self._processing_loop_inner()
+            except Exception as error:  # noqa: BLE001 - 프레임 단위 격리
+                self.error_count += 1
+                self.last_error = f"{type(error).__name__}: {error}"[:300]
+                LOGGER.exception(
+                    "처리 루프 예외 (frame=%d, 누적 %d회) — 0.5초 후 재개",
+                    self.frame_index, self.error_count,
+                )
+                with self.status_lock:
+                    self.status.error_count = self.error_count
+                    self.status.last_error = self.last_error
+                self.previous_gray_small = None
+                time.sleep(0.5)
+
+    def _processing_loop_inner(self) -> None:
         previous_tick = time.perf_counter()
         fps_ema = 0.0
 
@@ -271,40 +394,50 @@ class EscalatorMVP:
                 yolo_ran = True
 
             gray_small, scale_x, scale_y = self._prepare_flow_frame(frame)
-            flow: Optional[np.ndarray] = None
-            if self.previous_gray_small is not None:
-                flow = cv2.calcOpticalFlowFarneback(
-                    self.previous_gray_small,
-                    gray_small,
-                    None,
-                    pyr_scale=0.5,
-                    levels=3,
-                    winsize=21,
-                    iterations=3,
-                    poly_n=5,
-                    poly_sigma=1.2,
-                    flags=0,
-                )
+            previous_gray_small = self.previous_gray_small
             self.previous_gray_small = gray_small
 
             primary = self._select_primary_detection(self.last_detections)
             raw_direction = "NO_ESCALATOR"
             stable_direction = "NO_ESCALATOR"
             analysis: Optional[dict[str, Any]] = None
-            dx = dy = magnitude = direction_confidence = 0.0
+            dx = dy = magnitude = direction_confidence = stable_ratio = 0.0
 
             for detection in self.last_detections:
                 self._draw_detection(annotated, detection, is_primary=detection is primary)
 
-            if primary is not None and flow is not None:
-                analysis = self._analyze_flow(
-                    flow=flow,
-                    bbox=primary["bbox"],
-                    frame_width=frame_w,
-                    frame_height=frame_h,
+            # 탐지된 모든 객체의 움직임을 잰다. flow 필드는 프레임당 한 번만
+            # 계산하므로, 객체가 늘어나도 추가 비용은 bbox 슬라이싱뿐이다.
+            flow_field = None
+            if previous_gray_small is not None and self.last_detections:
+                flow_field = self._compute_flow_field(
+                    prev_gray=previous_gray_small,
+                    curr_gray=gray_small,
+                    detections=self.last_detections,
                     scale_x=scale_x,
                     scale_y=scale_y,
                 )
+                for detection in self.last_detections:
+                    detection["motion"] = self._analyze_flow(
+                        field=flow_field,
+                        bbox=detection["bbox"],
+                        frame_width=frame_w,
+                        frame_height=frame_h,
+                        scale_x=scale_x,
+                        scale_y=scale_y,
+                    )
+                    self._stabilize_detection(detection)
+
+                # 사라진 track의 안정화기는 버린다. 계속 쌓이면 누수가 된다.
+                alive = {
+                    d.get("track_id") for d in self.last_detections
+                    if d.get("track_id") is not None
+                }
+                for stale in set(self.track_stabilizers) - alive:
+                    del self.track_stabilizers[stale]
+
+            if primary is not None and flow_field is not None:
+                analysis = primary["motion"]
                 raw_direction = analysis["direction"]
                 dx = analysis["dx"]
                 dy = analysis["dy"]
@@ -340,6 +473,23 @@ class EscalatorMVP:
             fps_ema = instant_fps if fps_ema == 0.0 else 0.9 * fps_ema + 0.1 * instant_fps
             previous_tick = now
 
+            if analysis is not None and self.motion_log_writer is not None:
+                self.motion_log_writer.write(
+                    build_motion_log_row(
+                        frame_id=self.frame_index,
+                        timestamp=time.time(),
+                        class_name=primary["class_name"] if primary else "",
+                        detection_confidence=float(primary["confidence"]) if primary else 0.0,
+                        raw_direction=raw_direction,
+                        stable_direction=stable_direction,
+                        stable_ratio=stable_ratio,
+                        direction_confidence=direction_confidence,
+                        analysis=analysis,
+                        yolo_ms=yolo_ms,
+                        processing_fps=fps_ema,
+                    )
+                )
+
             self._draw_header(
                 annotated,
                 stable_direction=stable_direction,
@@ -360,9 +510,12 @@ class EscalatorMVP:
                     motion_dy=float(dy),
                     motion_magnitude=float(magnitude),
                     direction_confidence=float(direction_confidence),
+                    motion_source=analysis.get("motion_source", "") if analysis else "",
                     processing_fps=float(fps_ema),
                     yolo_inference_ms=float(yolo_ms),
                     timestamp=time.time(),
+                    error_count=self.error_count,
+                    last_error=self.last_error,
                 )
 
             encode_ok, encoded = cv2.imencode(
@@ -412,11 +565,17 @@ class EscalatorMVP:
             self.latest_snapshot = snapshot
 
     def _run_yolo(self, frame: np.ndarray) -> list[dict[str, Any]]:
-        results = self.model.predict(
+        # `.track(persist=True)`로 프레임 간 ByteTrack 상태를 유지해
+        # 각 detection에 안정적인 track_id를 붙인다. `--yolo-every`로 일부
+        # 프레임을 건너뛰어도 다음 호출 시 이전 tracker 상태를 그대로
+        # 이어서 쓴다.
+        results = self.model.track(
             source=frame,
             conf=self.args.conf,
             imgsz=self.args.imgsz,
             device=self.args.device,
+            persist=True,
+            tracker=self.args.tracker,
             verbose=False,
         )
 
@@ -433,6 +592,7 @@ class EscalatorMVP:
             class_id = int(box.cls[0].detach().cpu().item())
             confidence = float(box.conf[0].detach().cpu().item())
             x1, y1, x2, y2 = map(int, xyxy.tolist())
+            track_id = int(box.id[0].item()) if box.id is not None else None
 
             detections.append(
                 {
@@ -441,16 +601,64 @@ class EscalatorMVP:
                     "confidence": confidence,
                     "bbox": (x1, y1, x2, y2),
                     "area": max(0, x2 - x1) * max(0, y2 - y1),
+                    "track_id": track_id,
                 }
             )
         return detections
 
-    @staticmethod
-    def _select_primary_detection(detections: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    def _stabilize_detection(self, detection: dict[str, Any]) -> None:
+        """이 객체의 raw 방향을 클래스별 히스토리로 안정화해 motion에 넣는다."""
+
+        track_id = detection.get("track_id")
+        if track_id is None:
+            # 추적 ID가 없으면 프레임 단위 판정을 그대로 쓴다.
+            detection["motion"]["stable_direction"] = detection["motion"]["direction"]
+            detection["motion"]["stable_ratio"] = 0.0
+            detection["motion"]["history_size"] = 0
+            return
+
+        class_name = str(detection.get("class_name", ""))
+        size = history_for(class_name)
+
+        stabilizer = self.track_stabilizers.get(track_id)
+        if stabilizer is None or stabilizer.history.maxlen != size:
+            stabilizer = DirectionStabilizer(
+                history_size=size,
+                majority_ratio=self.args.direction_majority,
+            )
+            self.track_stabilizers[track_id] = stabilizer
+
+        stable, ratio = stabilizer.update(detection["motion"]["direction"])
+        detection["motion"]["stable_direction"] = stable
+        detection["motion"]["stable_ratio"] = ratio
+        detection["motion"]["history_size"] = size
+
+    def _select_primary_detection(
+        self, detections: list[dict[str, Any]]
+    ) -> Optional[dict[str, Any]]:
+        """Flow ROI가 프레임마다 다른 물체로 튀지 않도록 track_id를 우선한다.
+
+        `docs/perception_integration_contract.md` §14의 우선순위(track_id →
+        detection ID → ROI overlap → confidence)를 따른다. 이 MVP는
+        detection ID·ROI overlap 매칭까지는 구현하지 않고, 이전에 추적하던
+        track_id가 이번 프레임에도 있으면 그것을 그대로 쓰고, 없으면(추적을
+        놓쳤거나 첫 프레임이면) 기존처럼 area*confidence가 가장 큰 detection을
+        새로 고른다.
+        """
+
         if not detections:
+            self.primary_track_id = None
             return None
-        # Prefer a large, confident escalator region.
-        return max(detections, key=lambda item: item["area"] * item["confidence"])
+
+        if self.primary_track_id is not None:
+            for detection in detections:
+                if detection.get("track_id") == self.primary_track_id:
+                    return detection
+            # 추적하던 track_id가 이번 프레임에 없다 — 놓친 것이므로 새로 고른다.
+
+        primary = max(detections, key=lambda item: item["area"] * item["confidence"])
+        self.primary_track_id = primary.get("track_id")
+        return primary
 
     def _prepare_flow_frame(self, frame: np.ndarray) -> tuple[np.ndarray, float, float]:
         frame_h, frame_w = frame.shape[:2]
@@ -461,16 +669,84 @@ class EscalatorMVP:
         gray = cv2.GaussianBlur(gray, (5, 5), 0)
         return gray, flow_width / frame_w, flow_height / frame_h
 
+    def _compute_flow_field(
+        self,
+        prev_gray: np.ndarray,
+        curr_gray: np.ndarray,
+        detections: list[dict[str, Any]],
+        scale_x: float,
+        scale_y: float,
+    ) -> dict[str, Any]:
+        """프레임당 한 번만 부르는 무거운 부분.
+
+        ego-motion 보정과 Farneback을 프레임 전체에 대해 수행한다. 객체별
+        측정은 이 결과를 잘라 쓰기만 하므로 탐지 개수와 무관하게 비용이
+        일정하다.
+        """
+
+        flow_h, flow_w = curr_gray.shape[:2]
+
+        # 탐지된 객체 전부를 배경에서 제외한다. 예전에는 primary 하나만
+        # 제외했는데, 그러면 나머지 움직이는 물체가 카메라 움직임으로
+        # 잘못 추정된다.
+        exclude_rois = [
+            (
+                float(np.clip(det["bbox"][0] * scale_x, 0, flow_w)),
+                float(np.clip(det["bbox"][1] * scale_y, 0, flow_h)),
+                float(np.clip(det["bbox"][2] * scale_x, 0, flow_w)),
+                float(np.clip(det["bbox"][3] * scale_y, 0, flow_h)),
+            )
+            for det in detections
+        ]
+
+        derotation = derotate_background_motion(
+            prev_gray,
+            curr_gray,
+            exclude_roi=exclude_rois or None,
+            detector=self.orb_detector,
+        )
+        flow_source_prev = (
+            derotation["aligned_prev"]
+            if derotation["aligned_prev"] is not None
+            else prev_gray
+        )
+
+        flow = cv2.calcOpticalFlowFarneback(
+            flow_source_prev,
+            curr_gray,
+            None,
+            pyr_scale=0.5,
+            levels=3,
+            winsize=21,
+            iterations=3,
+            poly_n=5,
+            poly_sigma=1.2,
+            flags=0,
+        )
+        return {
+            "flow": flow,
+            "motion_source": derotation["motion_source"],
+            "homography_inliers": derotation["inlier_count"],
+            "flow_width": flow_w,
+            "flow_height": flow_h,
+        }
+
     def _analyze_flow(
         self,
-        flow: np.ndarray,
+        field: dict[str, Any],
         bbox: tuple[int, int, int, int],
         frame_width: int,
         frame_height: int,
         scale_x: float,
         scale_y: float,
     ) -> dict[str, Any]:
-        flow_h, flow_w = flow.shape[:2]
+        """미리 계산된 flow 필드에서 bbox 하나의 움직임만 뽑는다."""
+
+        flow = field["flow"]
+        motion_source = field["motion_source"]
+        derotation = {"inlier_count": field["homography_inliers"]}
+        flow_h = field["flow_height"]
+        flow_w = field["flow_width"]
         x1, y1, x2, y2 = bbox
 
         # Shrink bbox slightly to reduce edge/background contamination.
@@ -490,19 +766,27 @@ class EscalatorMVP:
 
         roi_flow = flow[sy1:sy2, sx1:sx2]
         if roi_flow.size == 0:
-            return self._empty_analysis("UNCERTAIN")
+            return {**self._empty_analysis("UNCERTAIN"), "motion_source": motion_source}
 
-        # Estimate global camera motion using pixels outside the detected bbox.
-        background_mask = np.ones((flow_h, flow_w), dtype=bool)
-        background_mask[sy1:sy2, sx1:sx2] = False
-        background_vectors = flow[background_mask]
+        if motion_source == "homography":
+            # 배경은 이미 homography로 정렬됐으므로 추가 median 보정은 하지
+            # 않는다 — 남은 flow는 회전까지 보정된 순수 물체 움직임이다.
+            corrected = roi_flow
+            background_dx = 0.0
+            background_dy = 0.0
+        else:
+            # Fallback: 배경 feature가 부족할 때만 쓰는 기존 median 보정.
+            # 평행이동만 대충 보정하고 회전은 반영하지 못한다.
+            background_mask = np.ones((flow_h, flow_w), dtype=bool)
+            background_mask[sy1:sy2, sx1:sx2] = False
+            background_vectors = flow[background_mask]
 
-        background_dx = float(np.median(background_vectors[:, 0])) if background_vectors.size else 0.0
-        background_dy = float(np.median(background_vectors[:, 1])) if background_vectors.size else 0.0
+            background_dx = float(np.median(background_vectors[:, 0])) if background_vectors.size else 0.0
+            background_dy = float(np.median(background_vectors[:, 1])) if background_vectors.size else 0.0
 
-        corrected = roi_flow.copy()
-        corrected[..., 0] -= background_dx
-        corrected[..., 1] -= background_dy
+            corrected = roi_flow.copy()
+            corrected[..., 0] -= background_dx
+            corrected[..., 1] -= background_dy
 
         magnitude_map = np.linalg.norm(corrected, axis=2)
         valid_mask = (
@@ -523,23 +807,42 @@ class EscalatorMVP:
                 "valid_ratio": valid_ratio,
                 "background_dx": background_dx,
                 "background_dy": background_dy,
+                "motion_source": motion_source,
+                "homography_inliers": derotation["inlier_count"],
             }
 
         dx = float(np.median(valid_vectors[:, 0]))
         dy = float(np.median(valid_vectors[:, 1]))
         magnitude = float(np.hypot(dx, dy))
 
-        if abs(dy) < self.args.direction_threshold:
+        threshold = self.args.direction_threshold
+        # 에스컬레이터만 볼 때는 수직 성분만 봤다. 사람·차량까지 대상이
+        # 되면서 좌우 이동도 판정해야 하므로 우세 축을 먼저 고른다.
+        vertical_dominant = abs(dy) >= abs(dx)
+
+        if max(abs(dx), abs(dy)) < threshold:
             direction = "STATIONARY"
-            confidence = max(0.0, 1.0 - abs(dy) / max(self.args.direction_threshold, 1e-6))
-        else:
+            confidence = max(
+                0.0, 1.0 - max(abs(dx), abs(dy)) / max(threshold, 1e-6)
+            )
+        elif vertical_dominant:
             direction = "UP" if dy < 0 else "DOWN"
             matching = valid_vectors[:, 1] < 0 if direction == "UP" else valid_vectors[:, 1] > 0
             confidence = float(np.mean(matching))
 
-            # A strong horizontal component means up/down classification is less reliable.
-            verticality = abs(dy) / max(abs(dx) + abs(dy), 1e-6)
-            confidence *= float(np.clip(verticality * 1.5, 0.0, 1.0))
+            # 수평 성분이 크면 상하 판정의 신뢰도를 깎는다.
+            axis_purity = abs(dy) / max(abs(dx) + abs(dy), 1e-6)
+            confidence *= float(np.clip(axis_purity * 1.5, 0.0, 1.0))
+
+            if confidence < self.args.raw_direction_confidence:
+                direction = "UNCERTAIN"
+        else:
+            direction = "LEFT" if dx < 0 else "RIGHT"
+            matching = valid_vectors[:, 0] < 0 if direction == "LEFT" else valid_vectors[:, 0] > 0
+            confidence = float(np.mean(matching))
+
+            axis_purity = abs(dx) / max(abs(dx) + abs(dy), 1e-6)
+            confidence *= float(np.clip(axis_purity * 1.5, 0.0, 1.0))
 
             if confidence < self.args.raw_direction_confidence:
                 direction = "UNCERTAIN"
@@ -570,6 +873,8 @@ class EscalatorMVP:
             "flow_height": flow_h,
             "frame_width": frame_width,
             "frame_height": frame_height,
+            "motion_source": motion_source,
+            "homography_inliers": derotation["inlier_count"],
         }
 
     @staticmethod
@@ -633,7 +938,8 @@ class EscalatorMVP:
             f"Motion: {stable_direction} | "
             f"raw={analysis['direction']} | "
             f"dx={dx:.2f}, dy={dy:.2f} | "
-            f"conf={analysis['confidence']:.2f}"
+            f"conf={analysis['confidence']:.2f} | "
+            f"ego={analysis.get('motion_source', 'n/a')}"
         )
         cv2.putText(
             frame,
@@ -706,6 +1012,7 @@ HTML_PAGE = """
     <h2>안내 요청 (VLM)</h2>
     <p>
       <button id="describe" type="button">현재 상황 안내 요청</button>
+      <button id="describe-scene" type="button">주변 장면 설명 요청</button>
       <span id="vlm-meta"></span>
     </p>
     <div class="guidance" id="guidance">아직 요청하지 않았습니다.</div>
@@ -713,6 +1020,13 @@ HTML_PAGE = """
       <summary>디버깅 정보 (사용자 안내에 사용 금지)</summary>
       <pre id="vlm-debug">-</pre>
     </details>
+
+    <h2>음성 (STT / TTS)</h2>
+    <p>
+      <button id="voice-ask" type="button">말로 물어보기</button>
+      <span id="voice-meta"></span>
+    </p>
+    <div class="guidance" id="voice-heard">아직 듣지 않았습니다.</div>
 
     <h2>Current status</h2>
     <pre id="status">loading...</pre>
@@ -752,6 +1066,55 @@ HTML_PAGE = """
         document.getElementById('guidance').textContent = `오류: ${error.message}`;
       } finally { describeButton.disabled = false; }
     });
+
+    const describeSceneButton = document.getElementById('describe-scene');
+    describeSceneButton.addEventListener('click', async () => {
+      describeSceneButton.disabled = true;
+      document.getElementById('guidance').textContent = '분석 중...';
+      document.getElementById('vlm-meta').textContent = '';
+      try {
+        const response = await fetch('/vlm/describe_scene', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({})
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'VLM 요청 실패');
+        // 사용자 안내에는 검증이 끝난 message만 사용한다.
+        document.getElementById('guidance').textContent = data.message;
+        document.getElementById('vlm-meta').textContent =
+          `${data.mode} | ${data.service_status} | ${data.request_latency_ms} ms`;
+        document.getElementById('vlm-debug').textContent = JSON.stringify(data, null, 2);
+      } catch (error) {
+        document.getElementById('guidance').textContent = `오류: ${error.message}`;
+      } finally { describeSceneButton.disabled = false; }
+    });
+
+    const voiceAskButton = document.getElementById('voice-ask');
+    voiceAskButton.addEventListener('click', async () => {
+      voiceAskButton.disabled = true;
+      document.getElementById('voice-heard').textContent = '듣는 중...';
+      document.getElementById('voice-meta').textContent = '';
+      try {
+        const response = await fetch('/voice/ask', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'scene' }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || '음성 요청 실패');
+        const heard = data.heard || {};
+        document.getElementById('voice-heard').textContent =
+          heard.text ? `들은 말: ${heard.text}` : '말소리를 감지하지 못했습니다.';
+        document.getElementById('guidance').textContent = data.message || '-';
+        const spoken = data.spoken || {};
+        document.getElementById('voice-meta').textContent =
+          `STT ${heard.transcribe_ms || 0}ms | 재생 ${spoken.spoken ? '성공' : '실패'}`;
+        document.getElementById('vlm-debug').textContent = JSON.stringify(data, null, 2);
+      } catch (error) {
+        document.getElementById('voice-heard').textContent = `오류: ${error.message}`;
+      } finally { voiceAskButton.disabled = false; }
+    });
   </script>
 </body>
 </html>
@@ -780,6 +1143,16 @@ def create_app(engine: EscalatorMVP) -> Flask:
             flow_payload=snapshot["flow_payload"],
         )
 
+    @app.post("/guide")
+    def guide() -> Response:
+        """규칙 기반 즉시 안내. VLM을 부르지 않는다."""
+
+        data = request.get_json(silent=True) or {}
+        result = engine.build_rule_guidance(
+            max_items=int(data.get("max_items", 2))
+        )
+        return jsonify(result)
+
     @app.post("/vlm/describe")
     def vlm_describe() -> Response:
         from vlm_bridge import VLMBusyError  # 지연 import: VLM 미사용 실행 지원
@@ -803,6 +1176,29 @@ def create_app(engine: EscalatorMVP) -> Flask:
             return jsonify(error=f"VLM 요청에 실패했습니다: {error}"), 500
         return jsonify(result)
 
+    @app.post("/vlm/describe_scene")
+    def vlm_describe_scene() -> Response:
+        from vlm_bridge import VLMBusyError  # 지연 import: VLM 미사용 실행 지원
+
+        if engine.vlm_bridge is None:
+            return jsonify(error="VLM이 비활성화되어 있습니다."), 503
+        data = request.get_json(silent=True) or {}
+        query = data.get("query")
+        try:
+            result = engine.request_vlm_scene_description(
+                str(query) if query is not None else None
+            )
+        except VLMBusyError as error:
+            return jsonify(error=str(error)), 429
+        except ValueError as error:
+            return jsonify(error=str(error)), 400
+        except RuntimeError as error:
+            return jsonify(error=str(error)), 503
+        except Exception as error:  # noqa: BLE001 - 요청 단위로 격리한다
+            LOGGER.exception("VLM 장면 설명 요청 실패")
+            return jsonify(error=f"VLM 요청에 실패했습니다: {error}"), 500
+        return jsonify(result)
+
     @app.get("/video_feed")
     def video_feed() -> Response:
         def generate():
@@ -819,6 +1215,22 @@ def create_app(engine: EscalatorMVP) -> Flask:
 
         return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
+    # 음성 경로는 --enable-voice로 켰을 때만 등록된다.
+    from voice_endpoints import register_voice_routes
+    from guidance_router import register_router_routes
+
+    register_voice_routes(app, engine)
+    # 규칙/VLM(상태)/VLM(장면) 자동 분기. /guide/auto, /guide/decide
+    register_router_routes(app, engine)
+
+    # 모듈별 점검 대시보드(/test). 등록에 실패해도 본 서비스는 그대로 뜬다.
+    try:
+        from module_test import register_test_routes
+
+        register_test_routes(app, engine)
+    except Exception:  # noqa: BLE001
+        LOGGER.exception("모듈 점검 대시보드 등록 실패")
+
     return app
 
 
@@ -834,6 +1246,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--imgsz", type=int, default=640, help="YOLO input size")
     parser.add_argument("--device", default="0", help="Ultralytics device, e.g. 0 or cpu")
     parser.add_argument("--yolo-every", type=int, default=3, help="Run YOLO every N frames")
+    parser.add_argument(
+        "--tracker",
+        default="bytetrack.yaml",
+        help="ultralytics tracker config (예: bytetrack.yaml, botsort.yaml)",
+    )
     parser.add_argument("--flow-width", type=int, default=320, help="Optical flow working width")
     parser.add_argument("--roi-margin", type=float, default=0.08, help="Shrink YOLO bbox ratio")
     parser.add_argument("--min-motion", type=float, default=0.35)
@@ -860,6 +1277,69 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=10.0,
         help="VLM soft timeout(초)",
+    )
+    parser.add_argument(
+        "--enable-voice",
+        action="store_true",
+        help=(
+            "음성 입출력(STT/TTS)을 켠다. 시작 시 STT 모델을 한 번 로드하고 "
+            "/voice/listen, /voice/say, /voice/ask 경로가 열린다."
+        ),
+    )
+    parser.add_argument(
+        "--stt-model",
+        default="base",
+        help=(
+            "faster-whisper 모델 크기. 이 젯슨에서는 base가 1.3초, "
+            "small이 4.1초였다(ctranslate2가 CUDA 미지원이라 CPU 고정)."
+        ),
+    )
+    parser.add_argument("--stt-device", default="cpu", help="faster-whisper device")
+    parser.add_argument(
+        "--stt-compute-type", default="int8", help="faster-whisper compute type"
+    )
+    parser.add_argument("--stt-language", default="ko", help="STT 인식 언어")
+    parser.add_argument(
+        "--stt-noise-multiplier",
+        type=float,
+        default=2.5,
+        help=(
+            "발화 판정 임계값 = 노이즈 플로어 x 이 배수. 이 마이크는 게인이 "
+            "높아 노이즈 플로어가 4500 안팎이므로, 말소리가 인식되지 않으면 "
+            "1.5~2.0으로 낮춘다."
+        ),
+    )
+    parser.add_argument("--tts-language", default="ko", help="TTS 합성 언어")
+    parser.add_argument(
+        "--tts-engine",
+        default="melo",
+        choices=["melo", "gtts"],
+        help=(
+            "melo: 온디바이스 MeloTTS 한국어(기본, 네트워크 불필요). "
+            "gtts: 클라우드 폴백. melo 기동 실패 시 자동으로 gtts가 된다."
+        ),
+    )
+    parser.add_argument(
+        "--tts-melo-device", default="cuda",
+        help="MeloTTS 추론 장치. cpu는 RTF 3.0으로 느리므로 cuda를 쓴다.",
+    )
+    parser.add_argument(
+        "--tts-speed", type=float, default=1.0, help="TTS 발화 속도 배율"
+    )
+    parser.add_argument(
+        "--tts-alsa-device",
+        default=None,
+        help="mpg123에 넘길 ALSA 출력 장치(예: hw:0,3). 미지정 시 기본 장치.",
+    )
+    parser.add_argument(
+        "--motion-log",
+        type=Path,
+        default=None,
+        help=(
+            "Stage 1 ego-motion 보정 실측 검증용 CSV 로그 경로. 지정하면 "
+            "프레임마다 raw_direction/stable_direction/motion_source 등을 "
+            "한 줄씩 기록한다(성능에 큰 영향 없음, 기본은 비활성)."
+        ),
     )
     return parser.parse_args()
 

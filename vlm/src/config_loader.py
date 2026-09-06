@@ -22,15 +22,78 @@ UNSUPPORTED_KEYS = {
 # 4bit 양자화는 아직 구현되어 있지 않다. 값을 조용히 무시하지 않는다.
 SUPPORTED_QUANTIZATION = {"none"}
 
-REQUIRED_KEYS = {
+ENGINE_LOCAL = "local"
+ENGINE_GEMINI = "gemini"
+SUPPORTED_ENGINES = {ENGINE_LOCAL, ENGINE_GEMINI}
+
+# engine 키가 없는 기존 설정(jetson.json, pc.json)은 로컬 엔진으로 본다.
+DEFAULT_ENGINE = ENGINE_LOCAL
+
+BASE_REQUIRED_KEYS = {
     "environment",
-    "device",
     "max_new_tokens",
     "use_mock_model",
     "model_id",
+}
+
+# 로컬 엔진은 GPU와 이미지 프로세서 설정이 모두 필요하다.
+LOCAL_REQUIRED_KEYS = BASE_REQUIRED_KEYS | {
+    "device",
     "image_longest_edge",
     "max_image_size",
 }
+
+# API 엔진은 로컬 device·이미지 프로세서 설정을 쓰지 않는다.
+# max_image_size는 업로드 크기를 제한하는 용도로 계속 쓴다.
+GEMINI_REQUIRED_KEYS = BASE_REQUIRED_KEYS | {"max_image_size"}
+
+REQUIRED_KEYS_BY_ENGINE = {
+    ENGINE_LOCAL: LOCAL_REQUIRED_KEYS,
+    ENGINE_GEMINI: GEMINI_REQUIRED_KEYS,
+}
+
+
+def _validate_positive_int(config: dict[str, Any], key: str) -> None:
+    value = config[key]
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigValidationError(f"{key}: 양의 정수여야 합니다.")
+
+
+def _validate_gemini_options(config: dict[str, Any]) -> None:
+    """Gemini 엔진에서만 의미가 있는 선택 키를 검증한다."""
+
+    fallbacks = config.get("fallback_model_ids")
+    if fallbacks is not None:
+        if not isinstance(fallbacks, list) or not all(
+            isinstance(item, str) and item.strip() for item in fallbacks
+        ):
+            raise ConfigValidationError(
+                "fallback_model_ids: 비어 있지 않은 문자열의 배열이어야 합니다."
+            )
+
+    timeout = config.get("request_timeout_seconds")
+    if timeout is not None:
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or timeout <= 0
+        ):
+            raise ConfigValidationError(
+                "request_timeout_seconds: 0보다 큰 숫자여야 합니다."
+            )
+
+    stream = config.get("stream")
+    if stream is not None and not isinstance(stream, bool):
+        raise ConfigValidationError("stream: boolean이어야 합니다.")
+
+    quality = config.get("jpeg_quality")
+    if quality is not None:
+        if (
+            isinstance(quality, bool)
+            or not isinstance(quality, int)
+            or not 1 <= quality <= 100
+        ):
+            raise ConfigValidationError("jpeg_quality: 1~100 사이의 정수여야 합니다.")
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -49,37 +112,51 @@ def load_config(path: Path) -> dict[str, Any]:
     if not isinstance(config, dict):
         raise ConfigValidationError("설정 JSON의 최상위 구조는 객체여야 합니다.")
 
-    missing = sorted(REQUIRED_KEYS - config.keys())
+    engine = config.get("engine", DEFAULT_ENGINE)
+    if not isinstance(engine, str) or engine not in SUPPORTED_ENGINES:
+        raise ConfigValidationError(
+            f"engine: {sorted(SUPPORTED_ENGINES)} 중 하나여야 합니다."
+        )
+    config["engine"] = engine
+
+    required_keys = REQUIRED_KEYS_BY_ENGINE[engine]
+    missing = sorted(required_keys - config.keys())
     if missing:
         raise ConfigValidationError(f"필수 설정 키가 누락되었습니다: {', '.join(missing)}")
 
-    for key in ("environment", "device", "model_id"):
+    for key in ("environment", "model_id"):
         if not isinstance(config[key], str) or not config[key].strip():
             raise ConfigValidationError(f"{key}: 비어 있지 않은 문자열이어야 합니다.")
 
-    if config["device"] not in {"auto", "cuda", "cpu"}:
-        raise ConfigValidationError("device: auto, cuda, cpu 중 하나여야 합니다.")
+    # device는 로컬 엔진에서만 필수다. API 엔진에 들어 있으면 값만 확인한다.
+    if "device" in config:
+        if not isinstance(config["device"], str) or not config["device"].strip():
+            raise ConfigValidationError("device: 비어 있지 않은 문자열이어야 합니다.")
+        if config["device"] not in {"auto", "cuda", "cpu"}:
+            raise ConfigValidationError("device: auto, cuda, cpu 중 하나여야 합니다.")
 
     if not isinstance(config["use_mock_model"], bool):
         raise ConfigValidationError("use_mock_model: boolean이어야 합니다.")
 
     for key in ("max_new_tokens", "image_longest_edge", "max_image_size"):
-        value = config[key]
-        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-            raise ConfigValidationError(f"{key}: 양의 정수여야 합니다.")
+        if key in config:
+            _validate_positive_int(config, key)
 
     for key, guidance in UNSUPPORTED_KEYS.items():
         if key in config:
             raise ConfigValidationError(f"{key}: {guidance}")
 
-    quantization = config.get("quantization")
-    if quantization is not None and (
-        not isinstance(quantization, str)
-        or quantization.strip().lower() not in SUPPORTED_QUANTIZATION
-    ):
-        raise ConfigValidationError(
-            "quantization: 현재 엔진은 양자화를 구현하지 않았습니다. "
-            f"허용 값은 {sorted(SUPPORTED_QUANTIZATION)}입니다."
-        )
+    if engine == ENGINE_LOCAL:
+        quantization = config.get("quantization")
+        if quantization is not None and (
+            not isinstance(quantization, str)
+            or quantization.strip().lower() not in SUPPORTED_QUANTIZATION
+        ):
+            raise ConfigValidationError(
+                "quantization: 현재 엔진은 양자화를 구현하지 않았습니다. "
+                f"허용 값은 {sorted(SUPPORTED_QUANTIZATION)}입니다."
+            )
+    else:
+        _validate_gemini_options(config)
 
     return config
