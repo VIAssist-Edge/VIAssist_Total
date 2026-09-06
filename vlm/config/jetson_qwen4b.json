@@ -1,0 +1,20 @@
+{
+    "environment": "jetson",
+    "engine": "llamacpp",
+    "model_id": "Qwen3-VL-4B-Instruct-Q4_K_M (llama.cpp)",
+    "use_mock_model": false,
+    "max_new_tokens": 80,
+    "image_longest_edge": 640,
+    "max_image_size": 640,
+    "llamacpp": {
+        "server_url": "http://127.0.0.1:8082",
+        "autostart": true,
+        "binary": "~/vlm8b/llama.cpp/build/bin/llama-server",
+        "model_path": "~/vlm8b/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+        "mmproj_path": "~/vlm8b/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf",
+        "ctx": 1536,
+        "request_timeout_seconds": 30.0,
+        "jpeg_quality": 85,
+        "startup_timeout_seconds": 240.0
+    }
+}
