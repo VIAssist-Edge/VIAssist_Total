@@ -37,7 +37,7 @@ ABSOLUTE_MIN_RMS = 300  # 완전한 무음 환경에서 하한선
 
 # 말하는 도중 이 간격마다 부분 인식을 한 번씩 돌린다. 너무 짧게 잡으면
 # 워커가 계속 밀리고, 너무 길면 부분 결과가 늦게 나온다.
-PARTIAL_INTERVAL_MS = 700
+PARTIAL_INTERVAL_MS = 900
 
 # Whisper는 무음·소음 구간에서도 그럴듯한 문장을 만들어낸다. 세그먼트의
 # no_speech_prob이 이 값을 넘으면 환각으로 보고 버린다.
@@ -144,6 +144,17 @@ class STTService:
                 f"STT 모델을 로드하지 못했습니다: {error}"
             ) from error
 
+        # 첫 인식은 커널 초기화로 6초 넘게 걸린다(2026-09-05 실측 6.8s). 무음 1초로 미리 돈다.
+        try:
+            warm_started = time.perf_counter()
+            with TemporaryDirectory(prefix="viassist_stt_warm_") as temp_dir:
+                warm_path = Path(temp_dir) / "warm.wav"
+                self._write_wav(warm_path, b"\x00" * (SAMPLE_RATE * 2))
+                self.transcribe_file(warm_path)
+            print(f"[STT] warmup {(time.perf_counter() - warm_started) * 1000:.0f} ms")
+        except Exception as error:  # noqa: BLE001 - 워밍업 실패는 치명적이지 않다
+            print(f"[STT] warmup skipped: {error}")
+
         print(f"[STT] model: {model_size} ({device}/{compute_type})")
         print(
             f"[STT] input device index: {self.input_device} "
@@ -158,7 +169,7 @@ class STTService:
         self,
         *,
         max_seconds: float = 8.0,
-        silence_ms: int = 800,
+        silence_ms: int = 650,
         start_timeout_s: float = 4.0,
         aggressiveness: int = 3,
         noise_multiplier: Optional[float] = None,
@@ -291,6 +302,12 @@ class STTService:
             # 소음 구간에서 문장을 지어내는 것을 한 겹 더 막는다.
             vad_filter=True,
             condition_on_previous_text=False,
+            without_timestamps=True,
+            # 온도 fallback(최대 6회 재디코딩)과 무제한 생성이 소음 구간에서 20초 넘게 걸렸다.
+            # 질문은 한 문장이라 64토큰으로 충분하다. 최악 ~3초.
+            temperature=0.0,
+            max_new_tokens=64,
+            no_speech_threshold=0.6,
         )
         kept = [
             segment.text
@@ -346,7 +363,7 @@ class STTService:
         self,
         *,
         max_seconds: float = 8.0,
-        silence_ms: int = 800,
+        silence_ms: int = 650,
         start_timeout_s: float = 4.0,
         partial_interval_ms: int = PARTIAL_INTERVAL_MS,
         aggressiveness: int = 3,
@@ -389,11 +406,16 @@ class STTService:
         last_partial_at = 0.0
         partial_count = 0
 
+        # 마지막 워커가 입력받은 바이트 수. 발화 전체를 이미 덮었으면 최종 재인식을 생략한다.
+        last_partial_bytes = 0
+        speech_end_bytes = 0  # 마지막으로 말소리가 잡힌 시점까지의 바이트 수(뒤 침묵 제외)
+
         def transcribe_worker(pcm_bytes: bytes) -> None:
             try:
                 partial_result["text"] = self.transcribe_pcm(pcm_bytes)
             except Exception:  # noqa: BLE001 - 부분 인식 실패는 무시한다
                 partial_result["text"] = ""
+            partial_result["done"] = True
 
         native_frame_bytes = self.native_frame_samples * 2
         resample_state = None
@@ -457,6 +479,7 @@ class STTService:
                             speech_started = True
                             silence_run_ms = 0
                             collected.append(frame)
+                            speech_end_bytes = len(collected) * FRAME_BYTES
                         elif speech_started:
                             silence_run_ms += FRAME_MS
                             collected.append(frame)
@@ -487,20 +510,36 @@ class STTService:
                                     }
                             partial_result.clear()
                             last_partial_at = now
+                            pcm_for_worker = b"".join(collected)
+                            last_partial_bytes = len(pcm_for_worker)
                             partial_worker = threading.Thread(
                                 target=transcribe_worker,
-                                args=(b"".join(collected),),
+                                args=(pcm_for_worker,),
                                 daemon=True,
                             )
                             partial_worker.start()
 
-            # 발화 종료. 마지막 인식만 마저 돌린다.
-            if partial_worker is not None and partial_worker.is_alive():
-                partial_worker.join(timeout=3.0)
-
+            # 발화 종료. 마지막 부분 인식이 말소리 전체를 덮었으면 그걸 최종으로 쓴다.
             pcm = b"".join(collected) if speech_started else b""
             final_started = time.perf_counter()
-            final_text = self.transcribe_pcm(pcm)
+            # 뒤 침묵 프레임 2개(60ms) 정도의 오차는 허용한다.
+            partial_covers_speech = (
+                speech_started and last_partial_bytes >= max(0, speech_end_bytes - 2 * FRAME_BYTES)
+            )
+            final_source = "final"
+            if partial_covers_speech and partial_worker is not None:
+                if partial_worker.is_alive():
+                    partial_worker.join(timeout=4.0)
+                if partial_result.get("done") and partial_result.get("text") is not None:
+                    final_text = partial_result["text"]
+                    final_source = "partial_reused"
+                else:
+                    final_text = self.transcribe_pcm(pcm)
+            else:
+                # 워커가 아직 돌고 있으면 CPU를 나눠 쓰게 되므로 잠깐만 기다린다.
+                if partial_worker is not None and partial_worker.is_alive():
+                    partial_worker.join(timeout=1.0)
+                final_text = self.transcribe_pcm(pcm)
             final_ms = (time.perf_counter() - final_started) * 1000
         finally:
             self._lock.release()
@@ -511,6 +550,7 @@ class STTService:
             "heard_speech": bool(pcm),
             "audio_seconds": round(len(pcm) / (SAMPLE_RATE * 2), 2),
             "final_transcribe_ms": round(final_ms, 2),
+            "final_source": final_source,
             "total_ms": round((time.monotonic() - started_at) * 1000, 1),
             "partial_count": partial_count,
             "model_size": self.model_size,

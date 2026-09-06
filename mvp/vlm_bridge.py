@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import gc
+import os
 import sys
 import threading
 import time
@@ -47,12 +49,105 @@ class VLMBridge:
         *,
         timeout_seconds: Optional[float] = 10.0,
         jpeg_quality: int = 90,
+        config_path: Optional[Path] = None,
+        strict_frame_sync: bool = False,
+        idle_unload_seconds: Optional[float] = None,
     ) -> None:
-        self.pipeline = pipeline
+        self.pipeline: Optional[VIAssistVLMPipeline] = pipeline
         self.timeout_seconds = timeout_seconds
         self.jpeg_quality = jpeg_quality
         self._lock = threading.Lock()
         self.request_count = 0
+
+        # 유휴 언로드: 통합 메모리 젯슨에서 VLM 1.7 GB를 안 쓸 때 비워 둔다.
+        self._config_path = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
+        self._strict_frame_sync = strict_frame_sync
+        self._cached_model_id = self._read_model_id()
+        self.last_used_at = time.monotonic()
+        self.load_count = 1
+        self.unload_count = 0
+        self.last_load_ms = 0.0
+        env_idle = os.environ.get("VLM_IDLE_UNLOAD_S")
+        self.idle_unload_seconds = (
+            float(env_idle) if env_idle is not None else
+            (idle_unload_seconds if idle_unload_seconds is not None else 300.0)
+        )
+        self.reload_min_available_mb = float(os.environ.get("VLM_RELOAD_MIN_MB", "1900"))
+        if self.idle_unload_seconds and self.idle_unload_seconds > 0:
+            threading.Thread(target=self._idle_watcher, name="vlm-idle-unload", daemon=True).start()
+
+    def _read_model_id(self) -> str:
+        service = getattr(self.pipeline, "service", None)
+        return getattr(getattr(service, "engine", None), "model_id", "unknown")
+
+    @property
+    def is_loaded(self) -> bool:
+        return self.pipeline is not None
+
+    @staticmethod
+    def _available_mb() -> Optional[float]:
+        try:
+            with open("/proc/meminfo", encoding="utf-8") as handle:
+                for line in handle:
+                    if line.startswith("MemAvailable:"):
+                        return int(line.split()[1]) / 1024.0
+        except OSError:
+            return None
+        return None
+
+    def unload(self) -> bool:
+        """모델을 메모리에서 내린다. 추론 중이면 건너뛴다(False)."""
+
+        if not self._lock.acquire(blocking=False):
+            return False
+        try:
+            if self.pipeline is None:
+                return False
+            self.pipeline = None
+            gc.collect()
+            try:
+                import torch
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:  # noqa: BLE001
+                pass
+            self.unload_count += 1
+            print(f"[VLM] 유휴 {self.idle_unload_seconds:.0f}s → 언로드 (가용 {self._available_mb() or 0:.0f} MB)", flush=True)
+            return True
+        finally:
+            self._lock.release()
+
+    def _ensure_loaded(self) -> None:
+        """lock을 잡은 상태에서 호출. 내려가 있으면 다시 올린다."""
+
+        if self.pipeline is not None:
+            return
+        available = self._available_mb()
+        if available is not None and available < self.reload_min_available_mb:
+            raise RuntimeError(
+                f"메모리 여유 {available:.0f} MB < {self.reload_min_available_mb:.0f} MB — VLM을 다시 올릴 수 없습니다."
+            )
+        started = time.perf_counter()
+        config = load_config(self._config_path)
+        service = VLMService.from_config(config)
+        self.pipeline = VIAssistVLMPipeline(service, strict_frame_sync=self._strict_frame_sync)
+        self._cached_model_id = self._read_model_id()
+        self.last_load_ms = (time.perf_counter() - started) * 1000
+        self.load_count += 1
+        print(f"[VLM] 재로드 {self.last_load_ms:.0f} ms ({self._cached_model_id})", flush=True)
+
+    def _idle_watcher(self) -> None:
+        while True:
+            time.sleep(15.0)
+            try:
+                if (
+                    self.pipeline is not None
+                    and time.monotonic() - self.last_used_at >= self.idle_unload_seconds
+                ):
+                    self.unload()
+            except Exception:  # noqa: BLE001 - 감시 스레드는 죽지 않는다
+                pass
 
     @classmethod
     def from_config(
@@ -75,6 +170,8 @@ class VLMBridge:
             pipeline,
             timeout_seconds=timeout_seconds,
             jpeg_quality=jpeg_quality,
+            config_path=Path(config_path),
+            strict_frame_sync=strict_frame_sync,
         )
 
     @property
@@ -89,8 +186,9 @@ class VLMBridge:
 
     @property
     def model_id(self) -> str:
-        service = getattr(self.pipeline, "service", None)
-        return getattr(getattr(service, "engine", None), "model_id", "unknown")
+        if self.pipeline is None:
+            return self._cached_model_id
+        return self._read_model_id()
 
     @staticmethod
     def normalize_query(user_query: Optional[str]) -> str:
@@ -141,6 +239,8 @@ class VLMBridge:
                     raise RuntimeError("캡처 이미지를 인코딩하지 못했습니다.")
                 image_path.write_bytes(encoded.tobytes())
 
+                self._ensure_loaded()
+                self.last_used_at = time.monotonic()
                 result = self.pipeline.process_perception(
                     image_path=image_path,
                     yolo_payload=yolo_payload,
@@ -149,6 +249,7 @@ class VLMBridge:
                     timeout_seconds=self.timeout_seconds,
                 )
             self.request_count += 1
+            self.last_used_at = time.monotonic()
         finally:
             self._lock.release()
 
@@ -192,12 +293,15 @@ class VLMBridge:
                     raise RuntimeError("캡처 이미지를 인코딩하지 못했습니다.")
                 image_path.write_bytes(encoded.tobytes())
 
+                self._ensure_loaded()
+                self.last_used_at = time.monotonic()
                 result = self.pipeline.process_scene_description(
                     image_path=image_path,
                     user_query=query,
                     timeout_seconds=self.timeout_seconds,
                 )
             self.request_count += 1
+            self.last_used_at = time.monotonic()
         finally:
             self._lock.release()
 

@@ -923,6 +923,12 @@ def register_test_routes(app: Flask, engine: Any) -> None:
                 "enabled": bridge is not None,
                 "model_id": getattr(bridge, "model_id", None),
                 "busy": bool(getattr(bridge, "is_busy", False)),
+                # 유휴 언로드 상태. False면 다음 요청 때 ~28 s 재로드가 붙는다.
+                "loaded": bool(getattr(bridge, "is_loaded", bridge is not None)),
+                "idle_unload_s": getattr(bridge, "idle_unload_seconds", None),
+                "idle_s": round(time.monotonic() - getattr(bridge, "last_used_at", time.monotonic()), 1) if bridge else None,
+                "load_count": getattr(bridge, "load_count", None),
+                "last_load_ms": round(getattr(bridge, "last_load_ms", 0.0) or 0.0),
                 "request_count": getattr(bridge, "request_count", 0),
                 "timeout_s": getattr(bridge, "timeout_seconds", None),
                 "config": str(getattr(engine.args, "vlm_config", "")),

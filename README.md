@@ -22,10 +22,10 @@ USB 카메라 ─┬─ YOLO(best.pt, 32클래스) ─┐
 | `mvp/class_rules.py` | 클래스 33개의 한국어 이름·문장 형태·히스토리 길이. 규칙 안내 템플릿. detection 표기 정규화 |
 | `mvp/background_motion.py` | 카메라 자체 움직임(ego-motion) 제거 — 배경 특징점 homography, 실패 시 중앙값 폴백 |
 | `mvp/perception_payload.py`, `motion_log.py` | Perception 계약(§4) payload 생성, 모션 로그 |
-| `mvp/stt_service.py` | faster-whisper(base, int8, CPU). VAD, 44.1 kHz→16 kHz, 스트리밍 부분 인식 |
-| `mvp/tts_service.py`, `melo_worker.py` | MeloTTS-Korean(CUDA, `~/melo_env` 별도 프로세스) + gTTS 폴백, 합성 캐시 |
+| `mvp/stt_service.py` | faster-whisper(base, int8, CPU). VAD(침묵 650 ms에 종료), 44.1 kHz→16 kHz, 스트리밍 부분 인식(마지막 부분 결과를 최종으로 재사용), 기동 워밍업, 디코딩 상한(온도 0·64토큰) |
+| `mvp/tts_service.py`, `melo_worker.py` | MeloTTS-Korean(CUDA, `~/melo_env` 별도 프로세스) + gTTS 폴백. **문장 단위 청킹**: 첫 문장이 나오면 바로 재생, 다음 문장은 재생 중 합성. 문장 단위 캐시 |
 | `mvp/voice_endpoints.py` | `/voice/listen` `/voice/stream` `/voice/say` `/voice/ask`(기본 mode=auto → 라우터) |
-| `mvp/vlm_bridge.py`, `failure_notice.py`, `slot_schema.py` | VLM 파이프라인 연결, 실패 사유 안내, 슬롯 프롬프트 |
+| `mvp/vlm_bridge.py`, `failure_notice.py`, `slot_schema.py` | VLM 파이프라인 연결(유휴 언로드/재로드 옵션 `VLM_IDLE_UNLOAD_S`, 기본 꺼짐), 실패 사유 안내, 슬롯 프롬프트 |
 | `mvp/module_test.py`, `module_test.html` | **모듈 점검 대시보드** `/test` (아래) |
 | `mvp/tests/` | 남은 모듈의 단위 테스트 |
 | `vlm/` | VLM 파이프라인(SmolVLM-500M 기본, Gemini 엔진 선택). `src/`(config·프롬프트·안전 규칙·결과 파서), `config/{jetson,pc,gemini}.json`, `samples/`, `tests/`, `docs/` |
@@ -118,7 +118,9 @@ MMS-TTS-kor fp32를 GPU·인프로세스로 돌리면 +1.4 GB·0.5~0.7 s. 벤치
 - 가용 메모리 **350 MB 미만이면 VLM 호출을 차단**하는 가드가 대시보드·라우터에 있다(`MEMORY_GUARD_MB`).
 - 새 모델을 올리는 실험은 **반드시 대시보드 서버를 내린 뒤**, 여유 1.5 GB 미만이면 중단.
 - llama.cpp 서버는 `--cache-ram 0` 필수(없으면 호출마다 35 MB 누적 → OOM), 입력 이미지는 크기를 고정(모양이 바뀌면 그래프 버퍼 재할당).
-- 시스템 설정은 `sudo bash scripts/jetson_setup.sh` 한 번: `earlyoom`(메모리 8%에서 개입, 스왑 무시), `journald` 영속화(`/var/log/journal`), `nvpmodel -m 1`(25 W).
+- 시스템 설정은 `sudo bash scripts/jetson_setup.sh` 한 번: `earlyoom`(메모리 5%≈380 MB에서 개입, 스왑 무시 — 8%로 두면 VLM 재로드 중 서버가 죽었다), `journald` 영속화(`/var/log/journal`), `nvpmodel -m 1`(25 W).
+- 전체 스택은 VLM 추론 중 가용 메모리가 ~880 MB까지 내려간다. VLM 유휴 언로드는 실측상 ~300 MB만 돌아오고 재로드(28 s) 때 더 깊이 파고들어 기본은 꺼 두었다.
+- 음성 지연 실측(09-06): 말이 끝난 뒤 침묵 0.65 s + 인식 0.6 s ≈ **1.3 s**에 텍스트. 이전엔 온도 fallback·무제한 생성으로 2.5 s 음성에 22 s가 걸렸다. TTS는 첫 문장 합성(~0.5 s, 캐시면 1 ms)부터 소리가 난다.
 - 서버 실행 중 카메라 핫플러그 금지 — 정지 사례 1회. 부팅 전에 꽂는다.
 - 젯슨이 응답을 잃으면 USB-C(A-to-C) 케이블로 PC에 연결 → USB 장치 모드(SSH `192.168.55.1`, 시리얼 COM, `L4T-README`)로 Wi-Fi 없이 접속 가능.
 - `pkill -f 패턴`이 자기 ssh 명령줄과 겹치면 세션이 죽는다 → 재시작은 스크립트 파일(`~/launch_mvp_test.sh`)로.

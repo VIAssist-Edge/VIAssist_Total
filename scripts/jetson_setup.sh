@@ -11,12 +11,15 @@ fi
 
 echo "== 1) earlyoom: 커널 OOM 킬러가 나서기 전에 가장 큰 프로세스를 죽여 시스템 정지를 막는다"
 # zram 스왑은 RAM 안에 있어서 "스왑도 바닥날 때까지" 기다리면 이미 스래싱으로 멈춘 뒤다.
-# -m 8: 가용 메모리 8% 미만이면 개입, -s 100: 스왑 상태는 무시, -r 60: 60초마다 상태 로그.
+# -m 5: 가용 메모리 5%(≈380 MB) 미만이면 개입. 8%(608 MB)로 두면 전체 스택이 VLM 추론 중
+#       정상적으로 880 MB까지 내려가고 VLM 재로드 때 그 밑으로 스쳐 서버가 죽었다(09-06 실측).
+#       완전 정지가 났던 구간은 여유 50 MB 안쪽이라 5%면 충분히 앞서 개입한다.
+# -s 100: 스왑 상태는 무시(zram은 RAM 안이라 기준이 못 됨), -r 60: 60초마다 상태 로그.
 if ! command -v earlyoom >/dev/null 2>&1; then
   apt-get update -qq && apt-get install -y -qq earlyoom
 fi
 cat > /etc/default/earlyoom <<'EOF'
-EARLYOOM_ARGS="-m 8 -s 100 -r 60"
+EARLYOOM_ARGS="-m 5 -s 100 -r 60"
 EOF
 systemctl enable --now earlyoom
 systemctl restart earlyoom

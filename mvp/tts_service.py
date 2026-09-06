@@ -21,6 +21,7 @@ import os
 import shutil
 import subprocess
 import threading
+import re
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -128,6 +129,48 @@ class MeloWorker:
                 self.process.kill()
             except Exception:  # noqa: BLE001
                 pass
+
+
+
+# 문장 경계. 한국어 종결(다./요./까?/죠!) 뒤 공백·줄바꿈에서 자른다. 너무 짧은 조각은 다음 조각에 붙인다.
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?。])\s+|\n+")
+MIN_CHUNK_CHARS = 6
+
+
+def split_sentences(text: str) -> list[str]:
+    """안내문을 문장 단위 청크로 나눈다. 빈 문자열이면 빈 리스트."""
+
+    parts = [p.strip() for p in _SENTENCE_SPLIT.split(text or "") if p and p.strip()]
+    merged: list[str] = []
+    for part in parts:
+        if merged and len(merged[-1]) < MIN_CHUNK_CHARS:
+            merged[-1] = f"{merged[-1]} {part}"
+        else:
+            merged.append(part)
+    return merged
+
+
+def concat_wavs(paths: list[Path], target: Path) -> Optional[Path]:
+    """같은 포맷의 wav들을 하나로 이어 붙인다(대시보드 청취용). 실패하면 None."""
+
+    try:
+        import wave
+
+        with wave.open(str(paths[0]), "rb") as first:
+            params = first.getparams()
+            frames = [first.readframes(first.getnframes())]
+        for path_ in paths[1:]:
+            with wave.open(str(path_), "rb") as handle:
+                if handle.getparams()[:3] != params[:3]:
+                    return None
+                frames.append(handle.readframes(handle.getnframes()))
+        with wave.open(str(target), "wb") as out:
+            out.setparams(params)
+            for chunk in frames:
+                out.writeframes(chunk)
+        return target
+    except Exception:  # noqa: BLE001
+        return None
 
 
 class TTSService:
@@ -287,26 +330,86 @@ class TTSService:
 
         try:
             started = time.perf_counter()
-            path, cached = self.synthesize(text)
-            synth_ms = (time.perf_counter() - started) * 1000
+            chunks = split_sentences(text) or [(text or "").strip()]
 
+            # 문장 i를 재생하는 동안 문장 i+1을 합성한다. 합성기는 하나(멜로 워커 직렬)라
+            # 스레드 하나로 다음 문장만 미리 만든다.
+            results: list[dict[str, Any]] = []
             play_error: Optional[str] = None
-            play_ms = 0.0
-            if play_audio:
-                play_started = time.perf_counter()
-                play_error = self.play(path)
-                play_ms = (time.perf_counter() - play_started) * 1000
+            play_ms_total = 0.0
+            synth_ms_total = 0.0
+            first_audio_ms: Optional[float] = None
+
+            def synth_job(sentence: str) -> dict[str, Any]:
+                t0 = time.perf_counter()
+                try:
+                    p, c = self.synthesize(sentence)
+                    return {"text": sentence, "path": p, "cached": c,
+                            "synthesize_ms": (time.perf_counter() - t0) * 1000, "error": None}
+                except Exception as error:  # noqa: BLE001
+                    return {"text": sentence, "path": None, "cached": False,
+                            "synthesize_ms": (time.perf_counter() - t0) * 1000, "error": str(error)}
+
+            pending = synth_job(chunks[0])
+            for index, _sentence in enumerate(chunks):
+                current = pending
+                next_thread: Optional[threading.Thread] = None
+                next_box: dict[str, Any] = {}
+                if index + 1 < len(chunks):
+                    def run_next(s: str = chunks[index + 1]) -> None:
+                        next_box["result"] = synth_job(s)
+                    next_thread = threading.Thread(target=run_next, daemon=True)
+                    next_thread.start()
+
+                synth_ms_total += current["synthesize_ms"]
+                if current["error"] is not None:
+                    if play_error is None:
+                        play_error = f"합성 실패: {current['error']}"
+                    results.append(current)
+                elif play_audio:
+                    if first_audio_ms is None:
+                        first_audio_ms = (time.perf_counter() - started) * 1000
+                    play_started = time.perf_counter()
+                    err = self.play(current["path"])
+                    current["play_ms"] = (time.perf_counter() - play_started) * 1000
+                    play_ms_total += current["play_ms"]
+                    if err is not None and play_error is None:
+                        play_error = err
+                    results.append(current)
+                else:
+                    results.append(current)
+
+                if next_thread is not None:
+                    next_thread.join()
+                    pending = next_box.get("result") or {"text": chunks[index + 1], "path": None,
+                                                          "cached": False, "synthesize_ms": 0.0,
+                                                          "error": "합성 스레드 결과 없음"}
+
+            paths = [r["path"] for r in results if r.get("path") is not None]
+            if len(paths) == 1:
+                audio_path: Optional[Path] = paths[0]
+            elif paths and paths[0].suffix == ".wav":
+                audio_path = concat_wavs(paths, self._cache_path(text)) or paths[0]
+            else:
+                audio_path = paths[0] if paths else None
+            if first_audio_ms is None:
+                first_audio_ms = results[0]["synthesize_ms"] if results else 0.0
         finally:
             self._lock.release()
 
         return {
             "text": text,
             "engine": self.engine,
-            "audio_path": str(path),
-            "cached": cached,
-            "synthesize_ms": round(synth_ms, 2),
-            "play_ms": round(play_ms, 2),
-            "spoken": play_audio and play_error is None,
+            "audio_path": str(audio_path) if audio_path else "",
+            "cached": all(r.get("cached") for r in results) if results else False,
+            # 첫 소리가 나기까지의 시간(= 첫 문장 합성). 예전 필드 이름을 유지해 호출부가 그대로 동작한다.
+            "synthesize_ms": round(first_audio_ms, 2),
+            "synthesize_total_ms": round(synth_ms_total, 2),
+            "first_audio_ms": round(first_audio_ms, 2),
+            "play_ms": round(play_ms_total, 2),
+            "chunks": [{"text": r["text"], "cached": r.get("cached"), "synthesize_ms": round(r["synthesize_ms"], 1),
+                        "play_ms": round(r.get("play_ms", 0.0), 1), "error": r.get("error")} for r in results],
+            "spoken": play_audio and play_error is None and bool(paths),
             "play_error": play_error,
         }
 

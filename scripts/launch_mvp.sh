@@ -4,6 +4,9 @@
 #   STT_MODEL=small bash scripts/launch_mvp.sh
 # pkill -f 패턴이 이 스크립트 자신을 죽이지 않도록 [e]로 감싼다(자기 명령줄엔 escalator_mvp.py 문자열이 없다).
 set -u
+# VLM 유휴 언로드(초). 기본 0=끔. 실측(09-06) 언로드로 돌아오는 가용 메모리가 ~300 MB뿐이고 재로드 중 earlyoom에 죽을 수 있어 기본은 끈다.
+export VLM_IDLE_UNLOAD_S=${VLM_IDLE_UNLOAD_S:-0}
+export VLM_RELOAD_MIN_MB=${VLM_RELOAD_MIN_MB:-1200}
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 LOG=${LOG:-$HOME/mvp_server.log}
 STT_MODEL=${STT_MODEL:-base}
