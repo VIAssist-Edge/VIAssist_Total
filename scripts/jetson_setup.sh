@@ -24,10 +24,21 @@ sleep 1
 journalctl -u earlyoom --no-pager -n 2 | tail -1
 
 echo "== 2) journald 영속화: 재부팅 전 로그(정지 원인)가 남도록"
-mkdir -p /var/log/journal
+# Storage=auto만으로는 디렉터리를 만들어도 계속 /run(휘발)에 쓰는 경우가 있어 명시적으로 persistent로 둔다.
+mkdir -p /var/log/journal /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/10-persistent.conf <<'EOF'
+[Journal]
+Storage=persistent
+SystemMaxUse=300M
+EOF
 systemd-tmpfiles --create --prefix /var/log/journal || true
 systemctl restart systemd-journald
-ls -d /var/log/journal/*/ >/dev/null && echo "  /var/log/journal 준비됨"
+journalctl --flush 2>/dev/null || true
+if ls -d /var/log/journal/*/ >/dev/null 2>&1; then
+  echo "  /var/log/journal/$(ls /var/log/journal | head -1) 준비됨 — 다음 정지 뒤 'journalctl -b -1' 로 원인 확인 가능"
+else
+  echo "  경고: 영속 저널 디렉터리가 아직 없음. 'journalctl --header' 로 Storage 확인 필요" >&2
+fi
 
 echo "== 3) 전원 모드 25W (MAXN_SUPER는 순간 25W+ → 약한 어댑터/배터리에서 리셋)"
 if command -v nvpmodel >/dev/null 2>&1; then
