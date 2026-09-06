@@ -707,7 +707,7 @@ $('pl-run').addEventListener('click', async () => {
     $('pl-msg').textContent = (r.heard_text ? `들은 말: "${r.heard_text}" → ` : '') + (r.message || '(안내 문장 없음)');
     $('pl-meta').textContent = `서버 총 ${r.total_ms} ms (동기 단계 합 ${r.sync_ms} ms) · 브라우저 왕복 ${rt.toFixed(0)} ms · DRAM 여유 ${r.mem.mem_available_mb} MB` + (r.vlm && r.vlm.status ? ` · VLM status=${r.vlm.status}` : '');
     if (r.spoken && r.spoken.audio_url) { $('pl-audio').src = r.spoken.audio_url + '?' + Date.now(); }
-    const ROUTE_KO = {rule: '규칙 (VLM 없음)', vlm_state: 'VLM 상태 질문', vlm_scene: 'VLM 장면 설명'};
+    const ROUTE_KO = {rule: '규칙 (VLM 없음)', vlm_state: 'VLM 상태 질문', vlm_scene: 'VLM 장면 설명', scripted: '고정 응답 (데모)'};
     const route = r.route && r.route.route ? r.route.route : (mode === 'auto' ? '-' : mode);
     $('pl-route').textContent = '경로: ' + (ROUTE_KO[route] || route);
     $('pl-route').className = 'badge ' + (route === 'rule' ? 'ok' : route.startsWith('vlm') ? 'warn' : '');

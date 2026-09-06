@@ -1687,7 +1687,7 @@ def register_test_routes(app: Flask, engine: Any) -> None:
                   reason=decision["reason"], detections=decision["detections"],
                   target=(decision.get("target") or {}).get("korean"))
             route_info = decision
-            if decision["route"] != "rule":
+            if decision["route"] not in ("rule", "scripted"):
                 mem_now = mem_snapshot()
                 if (mem_now["mem_available_mb"] or 0) < MEMORY_GUARD_MB:
                     return jsonify(error=f"DRAM 여유 {mem_now['mem_available_mb']}MB < 가드 {MEMORY_GUARD_MB}MB — VLM 호출 중단", stages=stages), 507
@@ -1697,7 +1697,8 @@ def register_test_routes(app: Flask, engine: Any) -> None:
             except Exception as error:  # noqa: BLE001
                 stage("실행(" + decision["route"] + ")", (time.perf_counter() - t) * 1000, error=str(error)[:200])
                 return jsonify(error=str(error), stages=stages), 500
-            label = {"rule": "규칙 안내 생성", "vlm_state": "VLM 상태 질문", "vlm_scene": "VLM 장면 설명"}[decision["route"]]
+            label = {"rule": "규칙 안내 생성", "vlm_state": "VLM 상태 질문", "vlm_scene": "VLM 장면 설명",
+                     "scripted": "고정 응답(데모, 지연 포함)"}[decision["route"]]
             vlm_res = routed.get("vlm") or {}
             err = vlm_res.get("error")
             stage(label, routed["exec_ms"], source=routed["source"],

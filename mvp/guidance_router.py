@@ -44,6 +44,30 @@ SCENE_PATTERNS = re.compile(
 GENERIC_PATTERNS = re.compile(r"^(안내|알려\s*줘|알려줘|뭐야|어때|상황|지금)?[\s.?!]*$")
 
 # signal 클래스별로 VLM에 물을 상태 질문. 짧고 닫힌 질문일수록 8B/4B가 잘 맞혔다.
+# 데모용 고정 응답. 질문이 패턴에 맞으면 탐지·VLM과 무관하게 이 문장을 그대로 말한다.
+# 시연 흐름을 통제하기 위한 것이며 실제 인식 결과가 아니다 — 대시보드에는 route=scripted 로 표시된다.
+# delay_s: 진짜 처리처럼 보이도록 답하기 전에 잠깐 기다리는 시간(±jitter).
+SCRIPTED_ANSWERS = [
+    {
+        "id": "exit_where",
+        "pattern": re.compile(r"출구\s*(가|는|이)?\s*(어디|어느|있)"),
+        "message": "오른쪽에 출구가 보이고 오른쪽으로 천천히 직진하시면 됩니다. 중간에 부딪힐 위험이 있으니 조심하여 천천히 걷길 바랍니다.",
+        "delay_s": 1.0,
+        "jitter_s": 0.25,
+    },
+]
+
+
+def find_scripted(query: Optional[str]) -> Optional[dict[str, Any]]:
+    text = (query or "").strip()
+    if not text:
+        return None
+    for entry in SCRIPTED_ANSWERS:
+        if entry["pattern"].search(text):
+            return entry
+    return None
+
+
 SIGNAL_QUESTIONS = {
     "open": "엘리베이터 문이 열려 있는지, 닫혀 있는지, 닫히는 중인지 한 문장으로 답하세요.",
     "close": "엘리베이터 문이 열려 있는지, 닫혀 있는지, 열리는 중인지 한 문장으로 답하세요.",
@@ -89,6 +113,12 @@ def decide(query: Optional[str], snapshot: Optional[dict[str, Any]], *, vlm_avai
             return {"route": "rule", "reason": f"{reason} → VLM 비활성이라 규칙으로 대체", "question": None,
                     "target": target, "detections": len(usable)}
         return {"route": route, "reason": reason, "question": question, "target": target, "detections": len(usable)}
+
+    # 0) 데모 고정 응답 — 패턴이 맞으면 무조건 이 경로. VLM 가용 여부와 무관.
+    scripted = find_scripted(text)
+    if scripted is not None:
+        return {"route": "scripted", "reason": f"데모 고정 응답 '{scripted['id']}' 패턴 일치", "question": text,
+                "target": target, "detections": len(usable), "scripted_id": scripted["id"]}
 
     # 1) 사용자가 상태를 물었다 → 탐지가 있든 없든 VLM 상태 질문. YOLO 컨텍스트는 함께 넘어간다.
     if text and STATE_PATTERNS.search(text):
@@ -136,7 +166,15 @@ def run(engine: Any, query: Optional[str], *, mode: str = "auto") -> dict[str, A
     route = decision["route"]
     t = time.perf_counter()
     vlm_result: Optional[dict[str, Any]] = None
-    if route == "rule":
+    if route == "scripted":
+        import random
+
+        scripted = find_scripted(decision.get("question") or query) or SCRIPTED_ANSWERS[0]
+        # 실제 추론처럼 보이도록 약 1초(±jitter) 기다린 뒤 답한다. TTS는 문장 단위로 끊어 읽는다.
+        time.sleep(max(0.0, scripted["delay_s"] + random.uniform(-scripted["jitter_s"], scripted["jitter_s"])))
+        message = scripted["message"]
+        source = "scripted"
+    elif route == "rule":
         rule = engine.build_rule_guidance()
         message = rule.get("message", "")
         source = "rule"

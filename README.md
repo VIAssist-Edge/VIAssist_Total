@@ -102,7 +102,8 @@ cd mvp && python3 escalator_mvp.py --enable-voice --enable-vlm --stt-model base 
 
 | 모델 | 상주 | 호출 | 생성 | 슬롯 파싱 / object / 둘 다 | 비고 |
 |---|---|---|---|---|---|
-| SmolVLM-500M (현재) | 1.7 GB | 4.3 s | — | 7% / 0% / 0% | 한국어 생성 불가 |
+| SmolVLM-500M · HF transformers (현재 파이프라인) | 1.7 GB | 4.3 s | ~15 tok/s | 7% / 0% / 0% | 한국어 생성 불가 |
+| **SmolVLM-500M Q8 · llama.cpp** | **~0.4 GB** | **0.62 s** | **89 tok/s** | 40% / 0% / 0% | 같은 모델, 백엔드만 교체. 7배 빠르고 메모리 1/4 |
 | Qwen3-VL-4B Q4_K_M (llama.cpp) | 3.0 GB | 2.8 s | 16.7 tok/s | 71% / 14% / 5% | 위험 요소 환각 |
 | Qwen3-VL-8B Q4_K_M (llama.cpp) | 5.5 GB | 3.1~4.6 s | 11.4 tok/s | 93% / 24% / 14% | 닫힌 상태 질문에 정확, 열린 위험 질문에 약함 |
 

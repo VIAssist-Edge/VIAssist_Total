@@ -105,6 +105,8 @@ class SmolVLMEngine:
             self.processor.image_processor.max_image_size = {
                 "longest_edge": max_image_size
             }
+            # 타일 분할 없이 한 장만 넣는다. 토큰 수가 고정되어 지연이 예측 가능하다.
+            self.processor.image_processor.do_image_splitting = False
 
             print(
                 "[VLM] image processor:",
@@ -113,18 +115,88 @@ class SmolVLMEngine:
             )
 
         try:
-            self.model = AutoModelForImageTextToText.from_pretrained(
-                self.model_id,
-                torch_dtype=self.dtype,
-                low_cpu_mem_usage=True,
-            )
+            try:
+                # eager attention 대신 SDPA 커널. 지원 안 되는 버전이면 아래 폴백.
+                self.model = AutoModelForImageTextToText.from_pretrained(
+                    self.model_id,
+                    torch_dtype=self.dtype,
+                    low_cpu_mem_usage=True,
+                    attn_implementation="sdpa",
+                )
+                self.attn_implementation = "sdpa"
+            except (ValueError, TypeError):
+                self.model = AutoModelForImageTextToText.from_pretrained(
+                    self.model_id,
+                    torch_dtype=self.dtype,
+                    low_cpu_mem_usage=True,
+                )
+                self.attn_implementation = "eager(fallback)"
             self.model.to(self.device)
             self.model.eval()
+            print(f"[VLM] attention: {self.attn_implementation}")
         except Exception as error:
             raise VLMModelLoadError(
                 "VLM 모델을 로드하지 못했습니다.",
                 original_exception=error,
             ) from error
+
+        # 4) 문장 끝 정지 기준. 두 문장이 끝나거나 줄바꿈이 나오면 멈춘다(안내는 1~2문장).
+        self._stop_criteria = self._build_stop_criteria()
+
+        # 5) 워밍업: 첫 호출의 커널 초기화(8~10초)를 기동 시간으로 옮긴다.
+        self._warmup()
+
+    def _build_stop_criteria(self):
+        try:
+            from transformers import StoppingCriteria, StoppingCriteriaList
+        except Exception:  # noqa: BLE001
+            return None
+
+        tokenizer = getattr(self.processor, "tokenizer", None)
+        if tokenizer is None:
+            return None
+
+        class _SentenceStop(StoppingCriteria):
+            """생성된 부분만 디코드해 문장 종결 2개 또는 줄바꿈이 보이면 멈춘다."""
+
+            def __init__(self, tok, prompt_len_holder):
+                self.tok = tok
+                self.holder = prompt_len_holder
+
+            def __call__(self, input_ids, scores, **kwargs) -> bool:
+                start = self.holder.get("prompt_len", 0)
+                tail = input_ids[0, start:]
+                if tail.shape[0] < 4:
+                    return False
+                text = self.tok.decode(tail, skip_special_tokens=True)
+                if "\n" in text.strip():
+                    return True
+                return sum(text.count(ch) for ch in ".!?。") >= 2
+
+        self._prompt_len_holder = {"prompt_len": 0}
+        return StoppingCriteriaList([_SentenceStop(tokenizer, self._prompt_len_holder)])
+
+    def _warmup(self) -> None:
+        try:
+            import io
+            import time as _time
+            from tempfile import TemporaryDirectory
+
+            from PIL import Image
+
+            started = _time.perf_counter()
+            with TemporaryDirectory(prefix="viassist_vlm_warm_") as temp_dir:
+                warm_path = Path(temp_dir) / "warm.jpg"
+                Image.new("RGB", (256, 256), (40, 40, 40)).save(warm_path, format="JPEG")
+                saved = self.max_new_tokens
+                self.max_new_tokens = 4
+                try:
+                    self.generate(warm_path, "이 사진을 한 단어로 말하세요.", {})
+                finally:
+                    self.max_new_tokens = saved
+            print(f"[VLM] warmup {(_time.perf_counter() - started) * 1000:.0f} ms")
+        except Exception as error:  # noqa: BLE001 - 워밍업 실패는 치명적이지 않다
+            print(f"[VLM] warmup skipped: {error}")
 
     def _raise_inference_error(self, error: Exception) -> None:
         oom_type = getattr(self.torch.cuda, "OutOfMemoryError", ())
@@ -234,11 +306,16 @@ class SmolVLMEngine:
                 self.torch.cuda.reset_peak_memory_stats()
                 self.torch.cuda.synchronize()
 
+            holder = getattr(self, "_prompt_len_holder", None)
+            if holder is not None:
+                holder["prompt_len"] = int(inputs["input_ids"].shape[1])
+
             with self.torch.inference_mode():
                 generated_ids = self.model.generate(
                     **inputs,
                     max_new_tokens=self.max_new_tokens,
                     do_sample=False,
+                    stopping_criteria=self._stop_criteria,
                 )
 
             input_length = inputs["input_ids"].shape[1]
