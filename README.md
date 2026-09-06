@@ -30,6 +30,8 @@ USB 카메라 ─┬─ YOLO(best.pt, 32클래스) ─┐
 | `mvp/tests/` | 남은 모듈의 단위 테스트 |
 | `vlm/` | VLM 파이프라인(SmolVLM-500M 기본, Gemini 엔진 선택). `src/`(config·프롬프트·안전 규칙·결과 파서), `config/{jetson,pc,gemini}.json`, `samples/`, `tests/`, `docs/` |
 | `docs/` | 중간보고서, Perception 연동 계약, 연동 현황 |
+| `scripts/jetson_setup.sh` | 시스템 안정화 1회 설정(sudo): earlyoom, journald 영속화, 25W 전원 모드 |
+| `scripts/launch_mvp.sh` | 전체 스택 재기동 런처(세션 분리, 로그 `~/mvp_server.log`) |
 
 추적하지 않는 것(.gitignore): 모델 가중치(`*.pt` `*.engine` `*.onnx`), `vlm/.venv`, `vlm/.env`(API 키), `mvp/reports/`(벤치·오류 기록·영상), 로그.
 실험·벤치 코드는 젯슨 `~/han/archive_2026-09-05/`에 보관(목록 `MOVED.txt`).
@@ -40,13 +42,15 @@ USB 카메라 ─┬─ YOLO(best.pt, 32클래스) ─┐
 `~/melo_env`(MeloTTS 전용 venv), `mvp/best.pt`(팀 학습 YOLO 32클래스). VLM 의존성은 `vlm/requirements-jetson.txt`.
 
 ```bash
-# 전체 스택(YOLO+Flow+VLM+STT+TTS+대시보드) — 기동 약 2분 (VLM 30 s + 음성 60 s)
-cd ~/viassist/mvp
-python3 escalator_mvp.py --enable-voice --enable-vlm --stt-model base \
-    --vlm-config ../vlm/config/jetson.json --port 5000
+# 0) 처음 한 번: 시스템 안정화(earlyoom·journald 영속화·25W) — 아래 "안정성" 참조
+sudo bash scripts/jetson_setup.sh
 
-# 홈에 둔 런처: 위 명령을 세션과 분리해 띄우고 ~/mvp_server.log에 로그를 쓴다
-~/launch_mvp_test.sh
+# 1) 전체 스택(YOLO+Flow+VLM+STT+TTS+대시보드) — 기동 약 2분 (VLM 30 s + 음성 60 s)
+bash scripts/launch_mvp.sh            # 세션과 분리해 띄우고 ~/mvp_server.log 에 로그
+
+# 직접 띄울 때
+cd mvp && python3 escalator_mvp.py --enable-voice --enable-vlm --stt-model base \
+    --vlm-config ../vlm/config/jetson.json --port 5000
 ```
 
 주요 옵션: `--model`(기본 best.pt) `--camera N` `--conf 0.45` `--imgsz 640` `--yolo-every 3`(3프레임마다 추론)
@@ -114,7 +118,7 @@ MMS-TTS-kor fp32를 GPU·인프로세스로 돌리면 +1.4 GB·0.5~0.7 s. 벤치
 - 가용 메모리 **350 MB 미만이면 VLM 호출을 차단**하는 가드가 대시보드·라우터에 있다(`MEMORY_GUARD_MB`).
 - 새 모델을 올리는 실험은 **반드시 대시보드 서버를 내린 뒤**, 여유 1.5 GB 미만이면 중단.
 - llama.cpp 서버는 `--cache-ram 0` 필수(없으면 호출마다 35 MB 누적 → OOM), 입력 이미지는 크기를 고정(모양이 바뀌면 그래프 버퍼 재할당).
-- 권장 시스템 설정(sudo): `earlyoom` 설치, `journald` 영속화(`/var/log/journal`), `nvpmodel -m 1`(25 W).
+- 시스템 설정은 `sudo bash scripts/jetson_setup.sh` 한 번: `earlyoom`(메모리 8%에서 개입, 스왑 무시), `journald` 영속화(`/var/log/journal`), `nvpmodel -m 1`(25 W).
 - 서버 실행 중 카메라 핫플러그 금지 — 정지 사례 1회. 부팅 전에 꽂는다.
 - 젯슨이 응답을 잃으면 USB-C(A-to-C) 케이블로 PC에 연결 → USB 장치 모드(SSH `192.168.55.1`, 시리얼 COM, `L4T-README`)로 Wi-Fi 없이 접속 가능.
 - `pkill -f 패턴`이 자기 ssh 명령줄과 겹치면 세션이 죽는다 → 재시작은 스크립트 파일(`~/launch_mvp_test.sh`)로.
