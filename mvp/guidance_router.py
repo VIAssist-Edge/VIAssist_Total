@@ -50,7 +50,9 @@ GENERIC_PATTERNS = re.compile(r"^(안내|알려\s*줘|알려줘|뭐야|어때|�
 SCRIPTED_ANSWERS = [
     {
         "id": "exit_where",
-        "pattern": re.compile(r"출구\s*(가|는|이)?\s*(어디|어느|있)"),
+        # 공백·문장부호를 지운 문자열에 대고 맞춘다. STT가 "출구"를 "축구/출고/츨구"로,
+        # "어디 있어"를 "어딨어/어딧어/어디에있어"로 적는 경우까지 잡는다.
+        "pattern": re.compile(r"(출구|축구|출고|츨구|출귀)(가|는|이|를|요)?(어디|어딨|어딧|어느|있|찾|위치)"),
         "message": "오른쪽에 출구가 보이고 오른쪽으로 천천히 직진하시면 됩니다. 중간에 부딪힐 위험이 있으니 조심하여 천천히 걷길 바랍니다.",
         "delay_s": 1.0,
         "jitter_s": 0.25,
@@ -58,8 +60,17 @@ SCRIPTED_ANSWERS = [
 ]
 
 
+_NORMALIZE = re.compile(r"[\s.,!?~…\"'()\[\]{}:;·-]+")
+
+
+def normalize_query(text: str) -> str:
+    """STT 출력의 공백·문장부호를 지워 패턴 매칭을 안정시킨다."""
+
+    return _NORMALIZE.sub("", text or "").lower()
+
+
 def find_scripted(query: Optional[str]) -> Optional[dict[str, Any]]:
-    text = (query or "").strip()
+    text = normalize_query(query or "")
     if not text:
         return None
     for entry in SCRIPTED_ANSWERS:
@@ -156,6 +167,10 @@ def run(engine: Any, query: Optional[str], *, mode: str = "auto") -> dict[str, A
     started = time.perf_counter()
     snapshot = engine.get_snapshot()
     vlm_available = getattr(engine, "vlm_bridge", None) is not None
+    # 어떤 mode로 왔든 고정 응답 패턴이면 그쪽이 우선 — 예전 UI가 mode=scene을 보내도 시연 문장이 나가야 한다.
+    if mode != "scripted" and find_scripted(query) is not None:
+        mode = "auto"
+    LOGGER.info("라우터 입력: query=%r mode=%s", (query or "")[:80], mode)
     if mode == "auto":
         decision = decide(query, snapshot, vlm_available=vlm_available)
     else:

@@ -1656,6 +1656,7 @@ def register_test_routes(app: Flask, engine: Any) -> None:
                 t = time.perf_counter()
                 heard_text = stt.transcribe_pcm(pcm) if pcm else ""
                 stage("STT 인식(whisper)", (time.perf_counter() - t) * 1000, text=heard_text)
+                LOGGER.info("파이프라인 STT 인식: %r (%.2fs 오디오)", heard_text, len(pcm) / 32000.0)
             finally:
                 stt._lock.release()
             query = heard_text or query

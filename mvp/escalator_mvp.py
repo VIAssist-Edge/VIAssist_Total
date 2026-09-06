@@ -1099,7 +1099,7 @@ HTML_PAGE = """
         const response = await fetch('/voice/ask', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode: 'scene' }),
+          body: JSON.stringify({ mode: 'auto' }),  // 라우터: 규칙/VLM 상태/VLM 장면/고정 응답
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || '음성 요청 실패');

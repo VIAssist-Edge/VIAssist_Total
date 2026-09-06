@@ -1,0 +1,19 @@
+{
+    "environment": "jetson",
+    "engine": "llamacpp",
+    "model_id": "SmolVLM-500M-Instruct-Q8_0 (llama.cpp)",
+    "use_mock_model": false,
+    "max_new_tokens": 40,
+    "image_longest_edge": 512,
+    "max_image_size": 512,
+    "llamacpp": {
+        "server_url": "http://127.0.0.1:8082",
+        "autostart": true,
+        "binary": "~/vlm8b/llama.cpp/build/bin/llama-server",
+        "model_path": "~/vlm8b/SmolVLM-500M-Instruct-Q8_0.gguf",
+        "mmproj_path": "~/vlm8b/mmproj-SmolVLM-500M-Instruct-Q8_0.gguf",
+        "ctx": 2048,
+        "request_timeout_seconds": 20.0,
+        "jpeg_quality": 85
+    }
+}

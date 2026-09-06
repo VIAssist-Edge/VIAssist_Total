@@ -24,7 +24,8 @@ SUPPORTED_QUANTIZATION = {"none"}
 
 ENGINE_LOCAL = "local"
 ENGINE_GEMINI = "gemini"
-SUPPORTED_ENGINES = {ENGINE_LOCAL, ENGINE_GEMINI}
+ENGINE_LLAMACPP = "llamacpp"
+SUPPORTED_ENGINES = {ENGINE_LOCAL, ENGINE_GEMINI, ENGINE_LLAMACPP}
 
 # engine 키가 없는 기존 설정(jetson.json, pc.json)은 로컬 엔진으로 본다.
 DEFAULT_ENGINE = ENGINE_LOCAL
@@ -47,9 +48,13 @@ LOCAL_REQUIRED_KEYS = BASE_REQUIRED_KEYS | {
 # max_image_size는 업로드 크기를 제한하는 용도로 계속 쓴다.
 GEMINI_REQUIRED_KEYS = BASE_REQUIRED_KEYS | {"max_image_size"}
 
+# llama.cpp 엔진: 로컬 device 대신 llamacpp 블록(서버 주소·모델 경로)을 쓴다. 이미지 크기는 클라이언트에서 맞춘다.
+LLAMACPP_REQUIRED_KEYS = BASE_REQUIRED_KEYS | {"image_longest_edge", "max_image_size", "llamacpp"}
+
 REQUIRED_KEYS_BY_ENGINE = {
     ENGINE_LOCAL: LOCAL_REQUIRED_KEYS,
     ENGINE_GEMINI: GEMINI_REQUIRED_KEYS,
+    ENGINE_LLAMACPP: LLAMACPP_REQUIRED_KEYS,
 }
 
 
@@ -156,7 +161,11 @@ def load_config(path: Path) -> dict[str, Any]:
                 "quantization: 현재 엔진은 양자화를 구현하지 않았습니다. "
                 f"허용 값은 {sorted(SUPPORTED_QUANTIZATION)}입니다."
             )
-    else:
+    elif engine == ENGINE_GEMINI:
         _validate_gemini_options(config)
+    else:
+        block = config.get("llamacpp")
+        if not isinstance(block, dict):
+            raise ConfigValidationError("llamacpp: 객체(server_url, model_path, mmproj_path ...)여야 합니다.")
 
     return config

@@ -28,7 +28,7 @@ USB 카메라 ─┬─ YOLO(best.pt, 32클래스) ─┐
 | `mvp/vlm_bridge.py`, `failure_notice.py`, `slot_schema.py` | VLM 파이프라인 연결(유휴 언로드/재로드 옵션 `VLM_IDLE_UNLOAD_S`, 기본 꺼짐), 실패 사유 안내, 슬롯 프롬프트 |
 | `mvp/module_test.py`, `module_test.html` | **모듈 점검 대시보드** `/test` (아래) |
 | `mvp/tests/` | 남은 모듈의 단위 테스트 |
-| `vlm/` | VLM 파이프라인(SmolVLM-500M 기본, Gemini 엔진 선택). `src/`(config·프롬프트·안전 규칙·결과 파서), `config/{jetson,pc,gemini}.json`, `samples/`, `tests/`, `docs/` |
+| `vlm/` | VLM 파이프라인. 엔진 셋: **`llamacpp`(기본, `src/llamacpp_engine.py` — llama-server를 자식으로 띄움)**, `local`(HF transformers SmolVLM), `gemini`. `config/jetson_llamacpp.json`(기본) / `jetson.json`(HF) / `gemini.json`. `src/`(config·프롬프트·안전 규칙·결과 파서), `samples/`, `tests/`, `docs/` |
 | `docs/` | 중간보고서, Perception 연동 계약, 연동 현황 |
 | `scripts/jetson_setup.sh` | 시스템 안정화 1회 설정(sudo): earlyoom, journald 영속화, 25W 전원 모드 |
 | `scripts/launch_mvp.sh` | 전체 스택 재기동 런처(세션 분리, 로그 `~/mvp_server.log`) |
@@ -102,8 +102,8 @@ cd mvp && python3 escalator_mvp.py --enable-voice --enable-vlm --stt-model base 
 
 | 모델 | 상주 | 호출 | 생성 | 슬롯 파싱 / object / 둘 다 | 비고 |
 |---|---|---|---|---|---|
-| SmolVLM-500M · HF transformers (현재 파이프라인) | 1.7 GB | 4.3 s | ~15 tok/s | 7% / 0% / 0% | 한국어 생성 불가 |
-| **SmolVLM-500M Q8 · llama.cpp** | **~0.4 GB** | **0.62 s** | **89 tok/s** | 40% / 0% / 0% | 같은 모델, 백엔드만 교체. 7배 빠르고 메모리 1/4 |
+| SmolVLM-500M · HF transformers (`jetson.json`) | 1.7 GB | 4.3 s (MAXN) / 9 s (25 W) | ~15 tok/s | 7% / 0% / 0% | 한국어 생성 불가 |
+| **SmolVLM-500M Q8 · llama.cpp (기본 `jetson_llamacpp.json`)** | **~0.4 GB** | **0.62 s** | **89 tok/s** | 40% / 0% / 0% | 같은 모델, 백엔드만 교체. 전체 스택 기동 후 여유 1.3 → **2.5 GB** |
 | Qwen3-VL-4B Q4_K_M (llama.cpp) | 3.0 GB | 2.8 s | 16.7 tok/s | 71% / 14% / 5% | 위험 요소 환각 |
 | Qwen3-VL-8B Q4_K_M (llama.cpp) | 5.5 GB | 3.1~4.6 s | 11.4 tok/s | 93% / 24% / 14% | 닫힌 상태 질문에 정확, 열린 위험 질문에 약함 |
 

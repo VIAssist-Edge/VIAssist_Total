@@ -10,10 +10,12 @@ export VLM_RELOAD_MIN_MB=${VLM_RELOAD_MIN_MB:-1200}
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 LOG=${LOG:-$HOME/mvp_server.log}
 STT_MODEL=${STT_MODEL:-base}
-VLM_CONFIG=${VLM_CONFIG:-../vlm/config/jetson.json}
+# 기본 VLM 백엔드는 llama.cpp(SmolVLM Q8, 0.6 s/호출). HF 경로로 돌리려면 VLM_CONFIG=../vlm/config/jetson.json
+VLM_CONFIG=${VLM_CONFIG:-../vlm/config/jetson_llamacpp.json}
 PORT=${PORT:-5000}
 
-pkill -f "[e]scalator_mvp.py" 2>/dev/null; pkill -f "[m]elo_worker.py" 2>/dev/null; sleep 3
+# llama-server는 VLM 엔진의 자식 프로세스라 부모가 죽으면 같이 정리되지만, 강제 종료 뒤 남았을 수 있어 함께 내린다.
+pkill -f "[e]scalator_mvp.py" 2>/dev/null; pkill -f "[m]elo_worker.py" 2>/dev/null; pkill -x llama-server 2>/dev/null; sleep 3
 cd "$REPO/mvp" || exit 1
 : > "$LOG"
 setsid nohup python3 escalator_mvp.py --enable-voice --enable-vlm --stt-model "$STT_MODEL" \

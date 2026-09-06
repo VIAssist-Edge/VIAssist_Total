@@ -63,6 +63,18 @@ class VLMService:
                 stream=config.get("stream", True),
             )
 
+        if engine_name == "llamacpp":
+            # llama-server(OpenAI 호환) 클라이언트. 서버는 엔진이 자식 프로세스로 띄운다.
+            from src.llamacpp_engine import LlamaCppVLMEngine
+
+            block = dict(config.get("llamacpp") or {})
+            return LlamaCppVLMEngine(
+                model_id=config["model_id"],
+                max_new_tokens=config["max_new_tokens"],
+                image_longest_edge=config["image_longest_edge"],
+                **block,
+            )
+
         return SmolVLMEngine(
             model_id=config["model_id"],
             max_new_tokens=config["max_new_tokens"],

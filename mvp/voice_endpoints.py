@@ -215,9 +215,14 @@ def register_voice_routes(app: Flask, engine: Any) -> None:
             )
 
         routed = None
+        LOGGER.info("음성 질문 인식: %r (mode=%s, %.2fs)", query, mode, heard.get("audio_seconds", 0.0))
         try:
-            if mode in ("auto", "rule", "vlm_state", "vlm_scene"):
-                import guidance_router
+            import guidance_router
+
+            # 예전 UI가 mode=scene/guidance를 보내도 시연용 고정 응답은 우선 적용한다.
+            if guidance_router.find_scripted(query) is not None:
+                mode = "auto"
+            if mode in ("auto", "rule", "vlm_state", "vlm_scene", "scripted"):
 
                 routed = guidance_router.run(engine, query, mode=mode)
                 # 규칙 경로면 vlm_result가 없다. 아래 failure_notice가 안전하게 넘어가도록 빈 dict.
